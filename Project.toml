@@ -1,0 +1,12 @@
+name = "SchurDecomposition"
+uuid = "3a221cdf-7b0a-43c0-9665-a87a2d8bff78"
+authors = ["fpacaud <francoispacaud8@gmail.com>"]
+version = "0.1.0"
+
+[deps]
+Argos = "ef244971-cf80-42b0-9762-2c2c832df5d5"
+ExaPF = "0cf0e50c-a82e-488f-ac7e-41ffdff1b8aa"
+FiniteDiff = "6a86dc24-6348-571c-b903-95158fe2bd41"
+LazyArtifacts = "4af54fe1-eca0-43a8-85a7-787d91b784e3"
+MadNLP = "2621e9c9-9eb4-46b1-8089-e8c72242dfb6"
+NLPModels = "a4795742-8479-5a88-8948-cc11e1c8c1a6"

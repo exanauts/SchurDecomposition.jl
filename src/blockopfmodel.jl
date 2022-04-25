@@ -11,44 +11,66 @@
 struct BlockOPFModel <: NLPModels.AbstractNLPModel{Float64, Vector{Float64}}
     meta::NLPModels.NLPModelMeta{Float64, Vector{Float64}}
     counters::NLPModels.Counters
+    id::Int
     nblocks::Int
     nx::Int
     nu::Int
-    models::Vector{Argos.OPFModel}
-    xs::Vector{Vector{Float64}}
-    gs::Vector{Vector{Float64}}
+    model::Argos.OPFModel
+    x::Vector{Float64}
+    xs::Vector{Float64}
+    g::Vector{Float64}
+    c::Vector{Float64}
     hash_x::Ref{UInt64}
     timers::Argos.NLPTimers
+    comm::Union{Nothing, MPI.Comm}
     etc::Dict{Symbol, Any}
 end
 
-function BlockOPFModel(nlps::Vector)
-    models = [Argos.OPFModel(nlp) for nlp in nlps]
+function BlockOPFModel(
+    datafile::String,
+    ploads::Array{Float64, 2},
+    qloads::Array{Float64, 2},
+    id::Int,
+    nscen::Int,
+    nblocks::Int;
+    comm=nothing,
+)
+    @assert nscen % nblocks == 0
+    Δ = div(nscen, nblocks)
+    shift = id * Δ
+    span = (shift+1):(shift+Δ)
+    pl = ploads[:, span]
+    ql = qloads[:, span]
+    nlp = Argos.StochEvaluator(datafile, pl, ql)
+    model = Argos.OPFModel(nlp)
 
-    nb = length(nlps)
-    nx = nlps[1].nx
-    nu = nlps[1].nu
-    xl, xu = Argos.bounds(nlps[1], Argos.Variables())
+    nx = nlp.nx
+    nu = nlp.nu
+    n = Argos.n_variables(nlp)
+    @assert n == nx + nu
+    xl, xu = Argos.bounds(nlp, Argos.Variables())
     xlx, xux = xl[1:nx], xu[1:nx]
     xlu, xuu = xl[1+nx:nx+nu], xu[1+nx:nx+nu]
-    bxl = [repeat(xlx, nb); xlu]
-    bxu = [repeat(xux, nb); xuu]
+    bxl = [repeat(xlx, nblocks); xlu]
+    bxu = [repeat(xux, nblocks); xuu]
 
-    x00 = Argos.initial(nlps[1])
-    x0 = [repeat(x00[1:nx], nb); x00[nx+1:nx+nu]]
+    x00 = Argos.initial(nlp)
+    x0 = [repeat(x00[1:nx], nblocks); x00[nx+1:nx+nu]]
 
-    gl, gu = Argos.bounds(nlps[1], Argos.Constraints())
+    gl, gu = Argos.bounds(nlp, Argos.Constraints())
 
-    xs = [zeros(Argos.n_variables(nlp)) for nlp in nlps]
-    gs = [zeros(Argos.n_variables(nlp)) for nlp in nlps]
+    xs = zeros(n)
+    x = zeros(nx*nblocks + nu)
+    g = zeros(nx + nu)
     etc = Dict{Symbol, Any}()
 
-    ncon = sum(NLPModels.get_ncon.(models))
+    ncon = NLPModels.get_ncon(model) * nblocks
     y0 = zeros(ncon)
+    c = zeros(ncon)
 
     return BlockOPFModel(
         NLPModels.NLPModelMeta(
-            nx*nb+nu,
+            nx*nblocks+nu,
             ncon=ncon,
             nnzj = 0,
             nnzh = 0,
@@ -56,48 +78,58 @@ function BlockOPFModel(nlps::Vector)
             y0 = y0,
             lvar = bxl,
             uvar = bxu,
-            lcon = repeat(gl, nb),
-            ucon = repeat(gu, nb),
+            lcon = repeat(gl, nblocks),
+            ucon = repeat(gu, nblocks),
             minimize = true
         ),
         NLPModels.Counters(),
-        length(nlps),
+        id,
+        nblocks,
         nx, nu,
-        models,
+        model,
+        x,
         xs,
-        gs,
+        g,
+        c,
         Ref(UInt64(0)),
         Argos.NLPTimers(),
+        comm,
         Dict{Symbol, Any}(),
     )
 end
 
+#=
+    Update primal values in all MPI processes.
+
+    We first update the primal values in the root process,
+    then broadcast it to all the subprocesses.
+    The local state xs is deduced from the id of the rank.
+=#
 function _update!(opf::BlockOPFModel, x::AbstractVector)
     hx = hash(x)
-    if hx != opf.hash_x[]
-        opf.timers.update_time += @elapsed begin
-            shift_u = opf.nx*opf.nblocks
-            for (idx, m) in enumerate(opf.models)
-                xi = opf.xs[idx]
-                shift_x = opf.nx * (idx - 1)
-                copyto!(xi, 1, x, shift_x+1, opf.nx)
-                copyto!(xi, 1+opf.nx, x, shift_u+1, opf.nu)
-            end
+    if MPI.Comm_rank(opf.comm) == MPI_ROOT
+        if hx != opf.hash_x[]
+            copyto!(opf.x, x)
+            opf.hash_x[] = hx
         end
-        opf.hash_x[] = hx
     end
+
+    # Broadcast current primal values to all subprocesses.
+    MPI.Bcast!(opf.x, MPI_ROOT, opf.comm)
+
+    # Copy values internally in opf.xs
+    shift_u = opf.nx*opf.nblocks
+    copyto!(opf.xs, 1, opf.x, opf.id * opf.nx + 1, opf.nx)
+    copyto!(opf.xs, opf.nx+1, opf.x, shift_u+1, opf.nu)
 end
 
 # Objective
 function NLPModels.obj(opf::BlockOPFModel, x::AbstractVector)
     _update!(opf, x)
-    opf.timers.obj_time += @elapsed begin
-        obj = 0.0
-        for (idx, m) in enumerate(opf.models)
-            obj += NLPModels.obj(m, opf.xs[idx])
-        end
-    end
-    return obj
+    obj = NLPModels.obj(opf.model, opf.xs)
+    # Accumulate objective along all subprocesses.
+    cum_obj = MPI.Allreduce(obj, MPI.SUM, opf.comm)
+    return cum_obj
 end
 
 # Gradient
@@ -105,16 +137,15 @@ function NLPModels.grad!(opf::BlockOPFModel, x::AbstractVector, g::AbstractVecto
     fill!(g, 0.0)
     _update!(opf, x)
     shift_u = opf.nx * opf.nblocks
-    gu = view(g, shift_u+1:shift_u+opf.nu)
     opf.timers.grad_time += @elapsed begin
-        for (idx, m) in enumerate(opf.models)
-            NLPModels.grad!(m, opf.xs[idx], opf.gs[idx])
-        end
-        for (idx, m) in enumerate(opf.models)
-            copyto!(g, (idx-1)*opf.nx+1, opf.gs[idx], 1, opf.nx)
-            gu .+= opf.gs[idx][opf.nx+1:opf.nx+opf.nu]
-        end
+        NLPModels.grad!(opf.model, opf.xs, opf.g)
+        # / State
+        copyto!(g, opf.id*opf.nx+1, opf.g, 1, opf.nx)
+        # / Coupling
+        copyto!(g, shift_u+1, opf.g, opf.nx+1, opf.nu)
     end
+    # Accumulate gradient on root
+    MPI.Reduce!(g, MPI.SUM, MPI_ROOT, opf.comm)
     return
 end
 
@@ -122,41 +153,39 @@ end
 function NLPModels.cons!(opf::BlockOPFModel, x::AbstractVector, c::AbstractVector)
     _update!(opf, x)
     opf.timers.cons_time += @elapsed begin
-        shift = 0
-        for (idx, m) in enumerate(opf.models)
-            nc = NLPModels.get_ncon(m)
-            ci = view(c, shift+1:shift+nc)
-            NLPModels.cons!(m, opf.xs[idx], ci)
-            shift += nc
-        end
+        m = NLPModels.get_ncon(opf.model)
+        shift = opf.id * m
+        ci = view(c, shift+1:shift+m)
+        NLPModels.cons!(opf.model, opf.xs, ci)
     end
+    # Accumulate constraints on root
+    MPI.Reduce!(c, MPI.SUM, MPI_ROOT, opf.comm)
     return
 end
 
 # Jacobian: sparse callback
-function NLPModels.jac_coord!(m::BlockOPFModel, x::AbstractVector, jac::AbstractVector)
+function NLPModels.jac_coord!(opf::BlockOPFModel, x::AbstractVector, jac::AbstractVector)
     # We should never assemble the full Jacobian
     @assert length(jac) == 0
-    _update!(m, x)
-    m.timers.jacobian_time += @elapsed begin
+    _update!(opf, x)
+    opf.timers.jacobian_time += @elapsed begin
         for (idx, m) in enumerate(opf.models)
-            # TODO
-            NLPModels.jac_coord!(m.nlp, opf.xs[idx], 0)
+            Argos.update_jacobian!(m.nlp, opf.xs[idx])
         end
     end
     return
 end
 
 # Hessian: sparse callback
-function NLPModels.hess_coord!(m::BlockOPFModel,x::AbstractVector, l::AbstractVector, hess::AbstractVector; obj_weight=1.0)
+function NLPModels.hess_coord!(opf::BlockOPFModel,x::AbstractVector, l::AbstractVector, hess::AbstractVector; obj_weight=1.0)
     # We should never assemble the full Hessian
     @assert length(hess) == 0
-    m.timers.hessian_time += @elapsed begin
+    opf.timers.hessian_time += @elapsed begin
         shift = 0
         for (idx, m) in enumerate(opf.models)
             nc = NLPModels.get_ncon(m)
             yi = view(l, shift+1:shift+nc)
-            NLPModels.hess_coord!(m.nlp, opf.xs[idx], yi, 0; obj_weight=obj_weight)
+            Argos.update_hessian!(m.nlp, opf.xs[idx], yi, obj_weight)
             shift += nc
         end
     end

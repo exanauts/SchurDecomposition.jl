@@ -122,7 +122,7 @@ function NLPModels.obj(opf::BlockOPFModel, x::AbstractVector)
     _update!(opf, x)
     obj = NLPModels.obj(opf.model, opf.xs)
     # Accumulate objective along all subprocesses.
-    cum_obj = MPI.Allreduce(obj, MPI.SUM, opf.comm)
+    cum_obj = comm_sum(obj, opf.comm)
     return cum_obj
 end
 
@@ -139,7 +139,7 @@ function NLPModels.grad!(opf::BlockOPFModel, x::AbstractVector, g::AbstractVecto
         copyto!(g, shift_u+1, opf.g, opf.nx+1, opf.nu)
     end
     # Accumulate gradient on all subprocesses
-    MPI.Allreduce!(g, MPI.SUM, opf.comm)
+    comm_sum!(g, opf.comm)
     return
 end
 
@@ -153,7 +153,7 @@ function NLPModels.cons!(opf::BlockOPFModel, x::AbstractVector, c::AbstractVecto
         NLPModels.cons!(opf.model, opf.xs, ci)
     end
     # Accumulate constraints on all processes
-    MPI.Allreduce!(c, MPI.SUM, opf.comm)
+    comm_sum!(c, opf.comm)
     return
 end
 

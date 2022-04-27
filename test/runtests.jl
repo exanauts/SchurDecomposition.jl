@@ -25,6 +25,21 @@ function test_block_opf_model(casename)
     blk = SchurDecomposition.BlockOPFModel(datafile, pload, qload, 1, nscen, nblk)
 
     @test isa(blk, NLPModels.AbstractNLPModel)
+
+    n = NLPModels.get_nvar(blk)
+    m = NLPModels.get_ncon(blk)
+    x0 = NLPModels.get_x0(blk)
+
+    NLPModels.obj(blk, x0)
+
+    g = zeros(n)
+    NLPModels.grad!(blk, x0, g)
+    # Check if gradient is correct
+    g_fd = FiniteDiff.finite_difference_gradient(x -> NLPModels.obj(blk, x), x0)
+    @test g_fd ≈ g
+
+    c = zeros(m)
+    NLPModels.cons!(blk, x0, c)
     return blk
 end
 

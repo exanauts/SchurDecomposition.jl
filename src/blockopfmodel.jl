@@ -11,7 +11,7 @@
 struct BlockOPFModel <: NLPModels.AbstractNLPModel{Float64, Vector{Float64}}
     meta::NLPModels.NLPModelMeta{Float64, Vector{Float64}}
     counters::NLPModels.Counters
-    id::Int
+    id::Int # warning: id is 0-based!
     nblocks::Int
     nx::Int
     nu::Int
@@ -107,20 +107,14 @@ end
 =#
 function _update!(opf::BlockOPFModel, x::AbstractVector)
     hx = hash(x)
-    if MPI.Comm_rank(opf.comm) == MPI_ROOT
-        if hx != opf.hash_x[]
-            copyto!(opf.x, x)
-            opf.hash_x[] = hx
-        end
+    if hx != opf.hash_x[]
+        copyto!(opf.x, x)
+        opf.hash_x[] = hx
+        # Copy values internally in opf.xs
+        shift_u = opf.nx*opf.nblocks
+        copyto!(opf.xs, 1, opf.x, opf.id * opf.nx + 1, opf.nx)
+        copyto!(opf.xs, opf.nx+1, opf.x, shift_u+1, opf.nu)
     end
-
-    # Broadcast current primal values to all subprocesses.
-    MPI.Bcast!(opf.x, MPI_ROOT, opf.comm)
-
-    # Copy values internally in opf.xs
-    shift_u = opf.nx*opf.nblocks
-    copyto!(opf.xs, 1, opf.x, opf.id * opf.nx + 1, opf.nx)
-    copyto!(opf.xs, opf.nx+1, opf.x, shift_u+1, opf.nu)
 end
 
 # Objective
@@ -144,8 +138,8 @@ function NLPModels.grad!(opf::BlockOPFModel, x::AbstractVector, g::AbstractVecto
         # / Coupling
         copyto!(g, shift_u+1, opf.g, opf.nx+1, opf.nu)
     end
-    # Accumulate gradient on root
-    MPI.Reduce!(g, MPI.SUM, MPI_ROOT, opf.comm)
+    # Accumulate gradient on all subprocesses
+    MPI.Allreduce!(g, MPI.SUM, opf.comm)
     return
 end
 
@@ -158,36 +152,35 @@ function NLPModels.cons!(opf::BlockOPFModel, x::AbstractVector, c::AbstractVecto
         ci = view(c, shift+1:shift+m)
         NLPModels.cons!(opf.model, opf.xs, ci)
     end
-    # Accumulate constraints on root
-    MPI.Reduce!(c, MPI.SUM, MPI_ROOT, opf.comm)
+    # Accumulate constraints on all processes
+    MPI.Allreduce!(c, MPI.SUM, opf.comm)
     return
 end
 
 # Jacobian: sparse callback
 function NLPModels.jac_coord!(opf::BlockOPFModel, x::AbstractVector, jac::AbstractVector)
+    _update!(opf, x)
     # We should never assemble the full Jacobian
     @assert length(jac) == 0
-    _update!(opf, x)
     opf.timers.jacobian_time += @elapsed begin
-        for (idx, m) in enumerate(opf.models)
-            Argos.update_jacobian!(m.nlp, opf.xs[idx])
-        end
+        # Update internally Jacobian with AD
+        nlp = Argos.backend(opf.model)
+        Argos.update_jacobian!(nlp, opf.xs)
     end
     return
 end
 
 # Hessian: sparse callback
-function NLPModels.hess_coord!(opf::BlockOPFModel,x::AbstractVector, l::AbstractVector, hess::AbstractVector; obj_weight=1.0)
+function NLPModels.hess_coord!(opf::BlockOPFModel, x::AbstractVector, l::AbstractVector, hess::AbstractVector; obj_weight=1.0)
+    _update!(opf, x)
     # We should never assemble the full Hessian
     @assert length(hess) == 0
     opf.timers.hessian_time += @elapsed begin
-        shift = 0
-        for (idx, m) in enumerate(opf.models)
-            nc = NLPModels.get_ncon(m)
-            yi = view(l, shift+1:shift+nc)
-            Argos.update_hessian!(m.nlp, opf.xs[idx], yi, obj_weight)
-            shift += nc
-        end
+        m = NLPModels.get_ncon(opf.model)
+        shift = opf.id * m
+        yi = view(l, shift+1:shift+m)
+        nlp = Argos.backend(opf.model)
+        Argos.update_hessian!(nlp, opf.xs, yi, obj_weight)
     end
     return
 end

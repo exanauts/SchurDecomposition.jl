@@ -1,4 +1,3 @@
-# examples/02-broadcast.jl
 using SchurDecomposition
 using LazyArtifacts
 using DelimitedFiles
@@ -32,11 +31,7 @@ blk = SchurDecomposition.BlockOPFModel(datafile, pload, qload, id, nscen, nblk; 
 n = NLPModels.get_nvar(blk)
 m = NLPModels.get_ncon(blk)
 
-if MPI.Comm_rank(comm) == root
-    x0 = NLPModels.get_x0(blk)
-else
-    x0 = zeros(n)
-end
+x0 = NLPModels.get_x0(blk)
 
 #=
     Evaluation of objective
@@ -57,6 +52,19 @@ print("rank = $(MPI.Comm_rank(comm)), c = $(sum(c))\n")
 g = zeros(n)
 NLPModels.grad!(blk, x0, g)
 print("rank = $(MPI.Comm_rank(comm)), g = $(sum(g))\n")
+
+#=
+    Evaluation of Jacobian
+=#
+jac = zeros(0)
+NLPModels.jac_coord!(blk, x0, jac)
+
+#=
+    Evaluation of Hessian
+=#
+hess = zeros(0)
+y0 = rand(m)
+NLPModels.hess_coord!(blk, x0, y0, hess)
 
 MPI.Finalize()
 

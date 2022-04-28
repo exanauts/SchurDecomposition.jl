@@ -4,6 +4,7 @@ using Test
 using LazyArtifacts
 using DelimitedFiles
 using Argos
+using MadNLP
 using NLPModels
 using FiniteDiff
 using SchurDecomposition
@@ -14,8 +15,6 @@ const DEMANDS = joinpath(artifact"ExaData", "ExaData", "mp_demand")
 function test_block_opf_model(casename)
     nblk = 2
     nscen = 10
-
-    shift = 0
 
     pload = readdlm(joinpath(DEMANDS, "$(casename)_onehour_60.Pd")) ./ 100
     qload = readdlm(joinpath(DEMANDS, "$(casename)_onehour_60.Qd")) ./ 100
@@ -43,7 +42,34 @@ function test_block_opf_model(casename)
     return blk
 end
 
+function test_schur_kkt(casename)
+    nblk = 2
+    nscen = 10
+    id = 0
+
+    pload = readdlm(joinpath(DEMANDS, "$(casename)_onehour_60.Pd")) ./ 100
+    qload = readdlm(joinpath(DEMANDS, "$(casename)_onehour_60.Qd")) ./ 100
+
+    # Create block model
+    datafile = joinpath(DATA, "$(casename).m")
+    blk = SchurDecomposition.BlockOPFModel(datafile, pload, qload, id, nscen, nblk)
+
+    x0 = NLPModels.get_x0(blk)
+    NLPModels.obj(blk, x0)
+    jac = Float64[]
+    NLPModels.jac_coord!(blk, x0, jac)
+
+    T = Float64
+    VI = Vector{Int}
+    VT = Vector{T}
+    MT = Matrix{T}
+    kkt = SchurDecomposition.SchurKKTSystem{T, VI, VT, MT}(blk, id, nblk, nothing)
+
+    @test isa(kkt, MadNLP.AbstractReducedKKTSystem)
+end
+
 @testset "BlockOPFModel" begin
     blk = test_block_opf_model("case9")
+    kkt = test_schur_kkt("case9")
 end
 

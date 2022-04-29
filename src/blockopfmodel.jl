@@ -179,3 +179,19 @@ function NLPModels.hess_coord!(opf::BlockOPFModel, x::AbstractVector, l::Abstrac
     return
 end
 
+# Special scaling to keep Jacobian local
+function MadNLP.scale_constraints!(
+    opf::BlockOPFModel,
+    con_scale::AbstractVector,
+    jac::AbstractMatrix; # Ji
+    max_gradient=1e-8,
+)
+    m = size(jac, 1) # number of local constraints
+    shift_c = opf.id * m
+    fill!(con_scale, 0.0)
+    _c = view(con_scale, shift_c+1:shift_c+m)
+    MadNLP._set_scaling!(_c, jac)
+    comm_sum!(con_scale, opf.comm)
+    con_scale .= min.(1.0, max_gradient ./ con_scale)
+end
+

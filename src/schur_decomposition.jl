@@ -76,18 +76,14 @@ function Base.getproperty(blk::SchurKKTSystem, d::Symbol)
     end
 end
 
-# Return SparseMatrixCOO to MadNLP
-function MadNLP.get_raw_jacobian(kkt::SchurKKTSystem)
-    # We should not reimplement this function, use custom scaling instead
-    return # TODO
-end
-
 MadNLP.initialize!(kkt::SchurKKTSystem) = MadNLP.initialize!(kkt.inner)
+MadNLP.get_raw_jacobian(kkt::SchurKKTSystem) = MadNLP.get_raw_jacobian(kkt.inner)
 
 function MadNLP.set_jacobian_scaling!(kkt::SchurKKTSystem{T,VI,VT,MT}, constraint_scaling::AbstractVector) where {T,VI,VT,MT}
-    @assert length(constraint_scaling) == 0
-    # TODO
-    # Perform scaling locally
+    m = size(kkt.inner.J, 1)
+    shift_c = kkt.id * m
+    _c = view(constraint_scaling, shift_c+1:shift_c+m)
+    MadNLP.set_jacobian_scaling!(kkt.inner, _c)
 end
 
 function MadNLP.mul!(y::AbstractVector, kkt::SchurKKTSystem, x::AbstractVector)

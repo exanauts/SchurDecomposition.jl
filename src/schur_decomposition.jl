@@ -31,9 +31,13 @@ end
 
 function SchurKKTSystem{T, VI, VT, MT}(
     blk::BlockOPFModel,
-    id::Int, nblocks::Int, comm;
+    ind_cons=MadNLP.get_index_constraints(blk);
     max_batches=256,
 ) where {T, VI, VT, MT}
+
+    id = blk.id
+    nblocks = blk.nblocks
+    comm = blk.comm
 
     nlp = blk.model
     kkt = Argos.BieglerKKTSystem{T, VI, VT, MT}(nlp; max_batches=max_batches)
@@ -44,17 +48,33 @@ function SchurKKTSystem{T, VI, VT, MT}(
     # Buffers
     _w1 = zeros(n)
     _w2 = zeros(m)
-    _w3 = zeros(n+m)
+    _w3 = zeros(n+ns)
     _w4 = zeros(n+ns+m)
     _w5 = zeros(n+ns+m)
     return SchurKKTSystem{T, VI, VT, MT}(kkt, id, nblocks, _w1, _w2, _w3, _w4, _w5, comm)
 end
 
 MadNLP.num_variables(kkt::SchurKKTSystem) = kkt.inner.nu
-MadNLP.get_hessian(kkt::SchurKKTSystem) = Float64[] # we should not communicate the Jacobian
-MadNLP.get_jacobian(kkt::SchurKKTSystem) = Float64[] # we should not communicate the Hessian
+MadNLP.get_hessian(kkt::SchurKKTSystem) = MadNLP.get_hessian(kkt.inner)
+MadNLP.get_jacobian(kkt::SchurKKTSystem) = MadNLP.get_jacobian(kkt.inner)
 MadNLP.is_reduced(::SchurKKTSystem) = true
-MadNLP.nnz_jacobian(kkt::SchurKKTSystem) = 0
+MadNLP.nnz_jacobian(kkt::SchurKKTSystem) = MadNLP.nnz_jacobian(kkt.inner)
+MadNLP.get_kkt(kkt::SchurKKTSystem) = kkt.inner.aug_com
+
+
+function Base.getproperty(blk::SchurKKTSystem, d::Symbol)
+    if d === :inner
+        return Base.getfield(blk, :inner)
+    elseif d === :pr_diag
+        return Base.getfield(blk.inner, :pr_diag)
+    elseif d === :du_diag
+        return Base.getfield(blk.inner, :du_diag)
+    elseif hasproperty(blk, d)
+        return Base.getfield(blk, d)
+    else
+        error("$d")
+    end
+end
 
 # Return SparseMatrixCOO to MadNLP
 function MadNLP.get_raw_jacobian(kkt::SchurKKTSystem)
@@ -81,7 +101,8 @@ function MadNLP.jtprod!(
 ) where {T, VI, VT, MT}
     nx = kkt.inner.nx
     nu = kkt.inner.nu
-    m = size(kkt.inner.J, 1) # TODO
+    m = size(kkt.inner.J, 1)
+    ns = length(kkt.inner.ind_ineq)
     shift_x = kkt.id * nx
     shift_u = kkt.nblocks * nx
     shift_s = kkt.nblocks * nx + nu + kkt.id * m
@@ -98,7 +119,7 @@ function MadNLP.jtprod!(
     # Unpack result
     copyto!(y_h, shift_x+1, _y, 1, nx)
     copyto!(y_h, shift_u+1, _y, nx+1, nu)
-    copyto!(y_h, shift_s+1, _y, nx+nu+1, m)
+    copyto!(y_h, shift_s+1, _y, nx+nu+1, ns)
 
     # Sum contributions
     comm_sum!(y_h, kkt.comm)
@@ -125,7 +146,7 @@ function MadNLP.solve_refine_wrapper!(
     # Problem's dimension
     m = div(ips.m, nblocks)  # constraints
     nx, nu = kkt.nx, kkt.nu # state and control
-    ns = m - nx # slacks
+    ns = length(kkt.ind_ineq)
 
     # Transfer
     shift_x = id * nx
@@ -137,13 +158,13 @@ function MadNLP.solve_refine_wrapper!(
     _b = ips.kkt._w5
 
     copyto!(_b,          1, b_h, shift_x + 1, nx)
-    copyto!(_b,       nu+1, b_h, shift_u + 1, nx)
+    copyto!(_b,       nx+1, b_h, shift_u + 1, nu)
     copyto!(_b,    nx+nu+1, b_h, shift_s + 1, ns)
     copyto!(_b, nx+nu+ns+1, b_h, shift_y + 1, m)
 
     # Transfer data to device
-    x = _load_buffer(kkt, _x, :kkt_x)::VT
-    b = _load_buffer(kkt, _b, :kkt_b)::VT
+    x = Argos._load_buffer(kkt, _x, :kkt_x)::VT
+    b = Argos._load_buffer(kkt, _b, :kkt_b)::VT
 
     MadNLP.fixed_variable_treatment_vec!(b, ips.ind_fixed)
     @assert length(b) == length(x) == ips.n + m
@@ -227,7 +248,7 @@ function MadNLP.solve_refine_wrapper!(
     MadNLP.fixed_variable_treatment_vec!(x, ips.ind_fixed)
 
     copyto!(x_h, shift_x + 1, x,          1, nx)
-    copyto!(x_h, shift_u + 1, x,       nu+1, nx)
+    copyto!(x_h, shift_u + 1, x,       nx+1, nu)
     copyto!(x_h, shift_s + 1, x,    nx+nu+1, ns)
     copyto!(x_h, shift_y + 1, x, nx+nu+ns+1, m)
 

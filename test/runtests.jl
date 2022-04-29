@@ -56,14 +56,14 @@ function test_schur_kkt(casename)
 
     x0 = NLPModels.get_x0(blk)
     NLPModels.obj(blk, x0)
-    jac = Float64[]
+    jac = zeros(NLPModels.get_nnzj(blk))
     NLPModels.jac_coord!(blk, x0, jac)
 
     T = Float64
     VI = Vector{Int}
     VT = Vector{T}
     MT = Matrix{T}
-    kkt = SchurDecomposition.SchurKKTSystem{T, VI, VT, MT}(blk, id, nblk, nothing)
+    kkt = SchurDecomposition.SchurKKTSystem{T, VI, VT, MT}(blk)
 
     @test isa(kkt, MadNLP.AbstractReducedKKTSystem)
 end

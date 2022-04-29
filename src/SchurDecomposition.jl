@@ -2,6 +2,7 @@ module SchurDecomposition
 
 import MPI
 
+import LinearAlgebra: mul!, ldiv!, axpy!
 import MadNLP
 import NLPModels
 import Argos

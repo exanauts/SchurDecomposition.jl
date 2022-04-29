@@ -72,8 +72,8 @@ function BlockOPFModel(
         NLPModels.NLPModelMeta(
             nx*nblocks+nu,
             ncon=ncon,
-            nnzj = 0,
-            nnzh = 0,
+            nnzj = NLPModels.get_nnzj(model),
+            nnzh = NLPModels.get_nnzh(model),
             x0 = x0,
             y0 = y0,
             lvar = bxl,
@@ -160,12 +160,9 @@ end
 # Jacobian: sparse callback
 function NLPModels.jac_coord!(opf::BlockOPFModel, x::AbstractVector, jac::AbstractVector)
     _update!(opf, x)
-    # We should never assemble the full Jacobian
-    @assert length(jac) == 0
     opf.timers.jacobian_time += @elapsed begin
         # Update internally Jacobian with AD
-        nlp = Argos.backend(opf.model)
-        Argos.update_jacobian!(nlp, opf.xs)
+        NLPModels.jac_coord!(opf.model, opf.xs, jac)
     end
     return
 end
@@ -173,14 +170,11 @@ end
 # Hessian: sparse callback
 function NLPModels.hess_coord!(opf::BlockOPFModel, x::AbstractVector, l::AbstractVector, hess::AbstractVector; obj_weight=1.0)
     _update!(opf, x)
-    # We should never assemble the full Hessian
-    @assert length(hess) == 0
     opf.timers.hessian_time += @elapsed begin
         m = NLPModels.get_ncon(opf.model)
         shift = opf.id * m
         yi = view(l, shift+1:shift+m)
-        nlp = Argos.backend(opf.model)
-        Argos.update_hessian!(nlp, opf.xs, yi, obj_weight)
+        NLPModels.hess_coord!(opf.model, opf.xs, yi, hess; obj_weight=obj_weight)
     end
     return
 end

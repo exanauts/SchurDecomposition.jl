@@ -17,6 +17,10 @@ casename = "case9"
 
 nblk = MPI.Comm_size(comm)
 id = MPI.Comm_rank(comm)
+
+if id == root
+    println("[ARGOS] Launch optimization on $(nblk) processes.")
+end
 nscen = 12
 
 shift = 0
@@ -56,13 +60,15 @@ print("rank = $(MPI.Comm_rank(comm)), g = $(sum(g))\n")
 #=
     Evaluation of Jacobian
 =#
-jac = zeros(0)
+nnzj = NLPModels.get_nnzj(blk)
+jac = zeros(nnzj)
 NLPModels.jac_coord!(blk, x0, jac)
 
 #=
     Evaluation of Hessian
 =#
-hess = zeros(0)
+nnzh = NLPModels.get_nnzh(blk)
+hess = zeros(nnzh)
 y0 = rand(m)
 NLPModels.hess_coord!(blk, x0, y0, hess)
 

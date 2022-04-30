@@ -123,7 +123,7 @@ function NLPModels.obj(opf::BlockOPFModel, x::AbstractVector)
     obj = NLPModels.obj(opf.model, opf.xs)
     # Accumulate objective along all subprocesses.
     cum_obj = comm_sum(obj, opf.comm)
-    return cum_obj
+    return cum_obj / opf.nblocks
 end
 
 # Gradient
@@ -133,6 +133,7 @@ function NLPModels.grad!(opf::BlockOPFModel, x::AbstractVector, g::AbstractVecto
     shift_u = opf.nx * opf.nblocks
     opf.timers.grad_time += @elapsed begin
         NLPModels.grad!(opf.model, opf.xs, opf.g)
+        opf.g ./= opf.nblocks # scale down gradient
         # / State
         copyto!(g, opf.id*opf.nx+1, opf.g, 1, opf.nx)
         # / Coupling
@@ -145,10 +146,11 @@ end
 
 # Constraints
 function NLPModels.cons!(opf::BlockOPFModel, x::AbstractVector, c::AbstractVector)
+    fill!(c, 0.0)
     _update!(opf, x)
+    m = NLPModels.get_ncon(opf.model)
+    shift = opf.id * m
     opf.timers.cons_time += @elapsed begin
-        m = NLPModels.get_ncon(opf.model)
-        shift = opf.id * m
         ci = view(c, shift+1:shift+m)
         NLPModels.cons!(opf.model, opf.xs, ci)
     end
@@ -174,7 +176,8 @@ function NLPModels.hess_coord!(opf::BlockOPFModel, x::AbstractVector, l::Abstrac
         m = NLPModels.get_ncon(opf.model)
         shift = opf.id * m
         yi = view(l, shift+1:shift+m)
-        NLPModels.hess_coord!(opf.model, opf.xs, yi, hess; obj_weight=obj_weight)
+        σ = obj_weight / opf.nblocks
+        NLPModels.hess_coord!(opf.model, opf.xs, yi, hess; obj_weight=σ)
     end
     return
 end

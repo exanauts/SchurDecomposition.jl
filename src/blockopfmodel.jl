@@ -33,6 +33,7 @@ function BlockOPFModel(
     id::Int,
     nscen::Int,
     nblocks::Int;
+    device=KA.CPU(),
     comm=nothing,
 )
     @assert nscen % nblocks == 0
@@ -41,23 +42,29 @@ function BlockOPFModel(
     span = (shift+1):(shift+Δ)
     pl = ploads[:, span]
     ql = qloads[:, span]
-    nlp = Argos.StochEvaluator(datafile, pl, ql)
-    model = Argos.OPFModel(nlp)
+    nlp = Argos.StochEvaluator(datafile, pl, ql; device=device)
+    model = if isa(device, KA.CPU)
+        Argos.OPFModel(nlp)
+    else
+        Argos.OPFModel(Argos.bridge(nlp))
+    end
 
     nx = nlp.nx
     nu = nlp.nu
     n = Argos.n_variables(nlp)
     @assert n == nx + nu
-    xl, xu = Argos.bounds(nlp, Argos.Variables())
+    xl = NLPModels.get_lvar(model)
+    xu = NLPModels.get_uvar(model)
     xlx, xux = xl[1:nx], xu[1:nx]
     xlu, xuu = xl[1+nx:nx+nu], xu[1+nx:nx+nu]
     bxl = [repeat(xlx, nblocks); xlu]
     bxu = [repeat(xux, nblocks); xuu]
 
-    x00 = Argos.initial(nlp)
+    x00 = NLPModels.get_x0(model)
     x0 = [repeat(x00[1:nx], nblocks); x00[nx+1:nx+nu]]
 
-    gl, gu = Argos.bounds(nlp, Argos.Constraints())
+    gl = NLPModels.get_lcon(model)
+    gu = NLPModels.get_ucon(model)
 
     xs = zeros(n)
     x = zeros(nx*nblocks + nu)

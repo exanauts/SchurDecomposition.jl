@@ -7,6 +7,8 @@ import MadNLP
 import NLPModels
 import Argos
 
+import KernelAbstractions as KA
+
 const MPI_ROOT = 0
 
 include("communication.jl")

@@ -7,6 +7,7 @@ import MadNLP
 import NLPModels
 import Argos
 
+import CUDA
 import KernelAbstractions as KA
 
 const MPI_ROOT = 0

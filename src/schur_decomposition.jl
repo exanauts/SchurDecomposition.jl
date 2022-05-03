@@ -115,6 +115,7 @@ function MadNLP.jtprod!(
 
     # Sum contributions
     comm_sum!(y_h, kkt.comm)
+    CUDA.synchronize()
 end
 
 MadNLP.compress_jacobian!(kkt::SchurKKTSystem) = MadNLP.compress_jacobian!(kkt.inner)
@@ -122,8 +123,10 @@ MadNLP.compress_hessian!(kkt::SchurKKTSystem) = MadNLP.compress_hessian!(kkt.inn
 
 function MadNLP.build_kkt!(kkt::SchurKKTSystem)
     MadNLP.build_kkt!(kkt.inner)
+    CUDA.synchronize()
     # Assemble Schur complement (reduction) on all processes
     comm_sum!(kkt.inner.aug_com, kkt.comm)
+    CUDA.synchronize()
 end
 
 function MadNLP.solve_refine_wrapper!(
@@ -220,6 +223,7 @@ function MadNLP.solve_refine_wrapper!(
 
     du .= tu
     comm_sum!(du, comm)
+    CUDA.synchronize()
     ips.cnt.linear_solver_time += @elapsed begin
         MadNLP.solve!(ips.linear_solver, du)
     end
@@ -263,8 +267,10 @@ function MadNLP.set_aug_diagonal!(kkt::SchurKKTSystem, ips::MadNLP.InteriorPoint
     ns = length(kkt.inner.ind_ineq)
     m = size(kkt.inner.J, 1)
 
+    _pr_diag = zeros(length(kkt.pr_diag))
     # Global regularization
-    kkt.pr_diag .= ips.zl./(ips.x.-ips.xl) .+ ips.zu./(ips.xu.-ips.x)
+    _pr_diag .= ips.zl./(ips.x.-ips.xl) .+ ips.zu./(ips.xu.-ips.x)
+    copyto!(kkt.pr_diag, _pr_diag)
     fill!(kkt.du_diag, 0.0)
 
     # Sync-up with internal KKT

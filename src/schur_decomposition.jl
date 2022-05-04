@@ -114,8 +114,8 @@ function MadNLP.jtprod!(
     copyto!(y_h, shift_s+1, _y, nx+nu+1, ns)
 
     # Sum contributions
-    comm_sum!(y_h, kkt.comm)
     CUDA.synchronize()
+    comm_sum!(y_h, kkt.comm)
 end
 
 MadNLP.compress_jacobian!(kkt::SchurKKTSystem) = MadNLP.compress_jacobian!(kkt.inner)
@@ -222,6 +222,7 @@ function MadNLP.solve_refine_wrapper!(
     axpy!(-1.0, khu, tu)                  # tᵤ = tᵤ - Kᵤₓ Gₓ⁻¹ r₄
 
     du .= tu
+    CUDA.synchronize()
     comm_sum!(du, comm)
     CUDA.synchronize()
     ips.cnt.linear_solver_time += @elapsed begin
@@ -259,19 +260,13 @@ function MadNLP.solve_refine_wrapper!(
 end
 
 # set_aug_diagonal
-function MadNLP.set_aug_diagonal!(kkt::SchurKKTSystem, ips::MadNLP.InteriorPointSolver)
+function _synchronize_regularization!(kkt::SchurKKTSystem)
     nblocks = kkt.nblocks
     id = kkt.id
     nx = kkt.inner.nx
     nu = kkt.inner.nu
     ns = length(kkt.inner.ind_ineq)
     m = size(kkt.inner.J, 1)
-
-    _pr_diag = zeros(length(kkt.pr_diag))
-    # Global regularization
-    _pr_diag .= ips.zl./(ips.x.-ips.xl) .+ ips.zu./(ips.xu.-ips.x)
-    copyto!(kkt.pr_diag, _pr_diag)
-    fill!(kkt.du_diag, 0.0)
 
     # Sync-up with internal KKT
     shift_x = id * nx
@@ -287,5 +282,20 @@ function MadNLP.set_aug_diagonal!(kkt::SchurKKTSystem, ips::MadNLP.InteriorPoint
 
     shift_c = id * m
     copyto!(kkt.inner.du_diag, 1, kkt.du_diag, shift_c+1, m)
+end
+
+function MadNLP.set_aug_diagonal!(kkt::SchurKKTSystem, ips::MadNLP.InteriorPointSolver)
+    _pr_diag = zeros(length(kkt.pr_diag))
+    # Global regularization
+    _pr_diag .= ips.zl./(ips.x.-ips.xl) .+ ips.zu./(ips.xu.-ips.x)
+    copyto!(kkt.pr_diag, _pr_diag)
+    fill!(kkt.du_diag, 0.0)
+    _synchronize_regularization!(kkt)
+end
+
+function MadNLP.regularize_diagonal!(kkt::SchurKKTSystem, primal, dual)
+    kkt.pr_diag .+= primal
+    kkt.du_diag .= .-dual
+    _synchronize_regularization!(kkt)
 end
 

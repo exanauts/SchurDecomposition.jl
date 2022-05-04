@@ -129,6 +129,7 @@ function NLPModels.obj(opf::BlockOPFModel, x::AbstractVector)
     _update!(opf, x)
     obj = NLPModels.obj(opf.model, opf.xs)
     # Accumulate objective along all subprocesses.
+    CUDA.synchronize()
     cum_obj = comm_sum(obj, opf.comm)
     return cum_obj / opf.nblocks
 end
@@ -147,6 +148,7 @@ function NLPModels.grad!(opf::BlockOPFModel, x::AbstractVector, g::AbstractVecto
         copyto!(g, shift_u+1, opf.g, opf.nx+1, opf.nu)
     end
     # Accumulate gradient on all subprocesses
+    CUDA.synchronize()
     comm_sum!(g, opf.comm)
     return
 end
@@ -162,6 +164,7 @@ function NLPModels.cons!(opf::BlockOPFModel, x::AbstractVector, c::AbstractVecto
         NLPModels.cons!(opf.model, opf.xs, ci)
     end
     # Accumulate constraints on all processes
+    CUDA.synchronize()
     comm_sum!(c, opf.comm)
     return
 end
@@ -193,14 +196,18 @@ end
 function MadNLP.scale_constraints!(
     opf::BlockOPFModel,
     con_scale::AbstractVector,
-    jac::AbstractMatrix; # Ji
+    jac::MadNLP.SparseMatrixCOO; # Ji
     max_gradient=1e-8,
 )
     m = size(jac, 1) # number of local constraints
     shift_c = opf.id * m
     fill!(con_scale, 0.0)
-    _c = view(con_scale, shift_c+1:shift_c+m)
-    MadNLP._set_scaling!(_c, jac)
+    for i in 1:length(jac.I)
+        row = @inbounds jac.I[i]
+        @assert 1 <= row <= m
+        @inbounds con_scale[row+shift_c] = max(con_scale[row+shift_c], abs(jac.V[i]))
+    end
+
     comm_sum!(con_scale, opf.comm)
     con_scale .= min.(1.0, max_gradient ./ con_scale)
 end

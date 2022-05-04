@@ -67,6 +67,11 @@ Collective to reduce the sum over array `data`.
 """
 comm_sum!(data::AbstractArray, comm::MPI.Comm) = MPI.Allreduce!(data, MPI.SUM, comm)
 comm_sum!(data::AbstractArray, comm::Nothing) = data
+# Special handling for CUDA device
+function comm_sum!(data::CUDA.CuArray, comm::MPI.Comm)
+    CUDA.synchronize() # Ensure we synchronize all streams before Reduce
+    MPI.Allreduce!(data, MPI.SUM, comm)
+end
 
 comm_rank(comm::MPI.Comm) = MPI.Comm_rank(comm)
 comm_rank(comm::Nothing) = 0

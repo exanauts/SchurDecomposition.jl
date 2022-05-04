@@ -114,7 +114,6 @@ function MadNLP.jtprod!(
     copyto!(y_h, shift_s+1, _y, nx+nu+1, ns)
 
     # Sum contributions
-    CUDA.synchronize()
     comm_sum!(y_h, kkt.comm)
 end
 
@@ -123,10 +122,8 @@ MadNLP.compress_hessian!(kkt::SchurKKTSystem) = MadNLP.compress_hessian!(kkt.inn
 
 function MadNLP.build_kkt!(kkt::SchurKKTSystem)
     MadNLP.build_kkt!(kkt.inner)
-    CUDA.synchronize()
     # Assemble Schur complement (reduction) on all processes
     comm_sum!(kkt.inner.aug_com, kkt.comm)
-    CUDA.synchronize()
 end
 
 function MadNLP.solve_refine_wrapper!(
@@ -222,9 +219,7 @@ function MadNLP.solve_refine_wrapper!(
     axpy!(-1.0, khu, tu)                  # tᵤ = tᵤ - Kᵤₓ Gₓ⁻¹ r₄
 
     du .= tu
-    CUDA.synchronize()
     comm_sum!(du, comm)
-    CUDA.synchronize()
     ips.cnt.linear_solver_time += @elapsed begin
         MadNLP.solve!(ips.linear_solver, du)
     end

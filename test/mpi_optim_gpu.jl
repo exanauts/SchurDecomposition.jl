@@ -15,11 +15,11 @@ using CUDA
 using CUDAKernels
 
 # Load GPU utils
-include("/home/fpacaud/exa/Argos/test/cusolver.jl")
+include(joinpath(dirname(pathof(Argos)), "..", "test", "cusolver.jl"))
 
-# We are living at the edge
+
 CUDA.allowscalar(false)
-N_GPU = 2
+N_GPU = CUDA.ndevices()
 
 #=
     MPI config
@@ -31,6 +31,11 @@ nblk = MPI.Comm_size(comm)
 id = MPI.Comm_rank(comm)
 
 CUDA.device!((id+1) % N_GPU)
+if id == root
+    @info "Init"
+    CUDA.memory_status()
+    println()
+end
 
 is_master = (MPI.Comm_rank(comm) == root)
 
@@ -59,6 +64,11 @@ blk = SchurDecomposition.BlockOPFModel(
     device=CUDADevice(),
     comm=comm,
 )
+if id == root
+    @info "Model"
+    CUDA.memory_status()
+    println()
+end
 
 # Instantiate Jacobian with proper values
 x0 = NLPModels.get_x0(blk)
@@ -82,8 +92,9 @@ MT = CuMatrix{T}
 
 KKT = SchurDecomposition.SchurKKTSystem{T, VI, VT, MT}
 
-ntrials = 10
 for i in 1:ntrials
+    GC.gc(true)
+    CUDA.reclaim()
     options = Dict{Symbol, Any}(
         :tol=>1e-5,
         :max_iter=>max_iter,
@@ -96,6 +107,11 @@ for i in 1:ntrials
     madopt = MadNLP.Options(linear_solver=linear_solver)
     MadNLP.set_options!(madopt, copy(options), Dict())
     ipp = MadNLP.InteriorPointSolver{KKT}(blk, madopt; option_linear_solver=options)
+    if id == root
+        @info "Optim"
+        CUDA.memory_status()
+        println()
+    end
     MadNLP.optimize!(ipp)
 end
 

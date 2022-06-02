@@ -3,12 +3,16 @@ using LazyArtifacts
 using DelimitedFiles
 using Argos
 using NLPModels
+using CUDAKernels
 
 import MPI
 MPI.Init()
 
+include(joinpath(dirname(pathof(Argos)), "..", "test", "cusolver.jl"))
+
 comm = MPI.COMM_WORLD
 root = 0
+
 
 const DATA = joinpath(artifact"ExaData", "ExaData")
 const DEMANDS = joinpath(artifact"ExaData", "ExaData", "mp_demand")
@@ -17,6 +21,8 @@ casename = "case9"
 
 nblk = MPI.Comm_size(comm)
 id = MPI.Comm_rank(comm)
+
+CUDA.device!(id % 2)
 
 if id == root
     println("[ARGOS] Launch optimization on $(nblk) processes.")
@@ -30,7 +36,11 @@ qload = readdlm(joinpath(DEMANDS, "$(casename)_onehour_60.Qd")) ./ 100
 
 # # Create block model
 datafile = joinpath(DATA, "$(casename).m")
-blk = SchurDecomposition.BlockOPFModel(datafile, pload, qload, id, nscen, nblk; comm=comm)
+blk = SchurDecomposition.BlockOPFModel(
+    datafile, pload, qload, id, nscen, nblk;
+    device=CUDADevice(),
+    comm=comm,
+)
 
 n = NLPModels.get_nvar(blk)
 m = NLPModels.get_ncon(blk)
@@ -63,14 +73,16 @@ print("rank = $(MPI.Comm_rank(comm)), g = $(sum(g))\n")
 nnzj = NLPModels.get_nnzj(blk)
 jac = zeros(nnzj)
 NLPModels.jac_coord!(blk, x0, jac)
+print("rank = $(MPI.Comm_rank(comm)), J = $(sum(jac))\n")
 
 #=
     Evaluation of Hessian
 =#
 nnzh = NLPModels.get_nnzh(blk)
 hess = zeros(nnzh)
-y0 = rand(m)
+y0 = ones(m)
 NLPModels.hess_coord!(blk, x0, y0, hess)
+print("rank = $(MPI.Comm_rank(comm)), H = $(sum(hess))\n")
 
 MPI.Finalize()
 

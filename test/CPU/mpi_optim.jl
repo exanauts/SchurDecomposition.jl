@@ -6,17 +6,16 @@ using NLPModels
 using MadNLP
 
 import MPI
+MPI.Init()
 
 #=
     MPI config
 =#
-MPI.Init()
 comm = MPI.COMM_WORLD
 root = 0
 
 nblk = MPI.Comm_size(comm)
 id = MPI.Comm_rank(comm)
-
 is_master = (MPI.Comm_rank(comm) == root)
 
 if is_master
@@ -26,7 +25,7 @@ end
 #=
     Data
 =#
-include("config.jl")
+include(joinpath("..", "config.jl"))
 
 
 #=

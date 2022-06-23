@@ -2,35 +2,35 @@ using SchurDecomposition
 using LazyArtifacts
 using DelimitedFiles
 using Argos
+using KernelAbstractions
 using NLPModels
-using CUDAKernels
 
 import MPI
 MPI.Init()
 
-include(joinpath(dirname(pathof(Argos)), "..", "test", "cusolver.jl"))
-
+#=
+    MPI config
+=#
 comm = MPI.COMM_WORLD
 root = 0
 
 
-const DATA = joinpath(artifact"ExaData", "ExaData")
-const DEMANDS = joinpath(artifact"ExaData", "ExaData", "mp_demand")
-
-casename = "case9"
-
 nblk = MPI.Comm_size(comm)
 id = MPI.Comm_rank(comm)
+is_master = (MPI.Comm_rank(comm) == root)
 
-CUDA.device!(id % 2)
-
-if id == root
-    println("[ARGOS] Launch optimization on $(nblk) processes.")
+if is_master
+    println("[ARGOS-CPU] Evaluate callbacks on $(nblk) processes.")
 end
-nscen = 12
 
-shift = 0
+#=
+    Data
+=#
+include(joinpath("..", "config.jl"))
 
+#=
+    Step 1: Load model
+=#
 pload = readdlm(joinpath(DEMANDS, "$(casename)_onehour_60.Pd")) ./ 100
 qload = readdlm(joinpath(DEMANDS, "$(casename)_onehour_60.Qd")) ./ 100
 
@@ -38,7 +38,7 @@ qload = readdlm(joinpath(DEMANDS, "$(casename)_onehour_60.Qd")) ./ 100
 datafile = joinpath(DATA, "$(casename).m")
 blk = SchurDecomposition.BlockOPFModel(
     datafile, pload, qload, id, nscen, nblk;
-    device=CUDADevice(),
+    device=CPU(),
     comm=comm,
 )
 

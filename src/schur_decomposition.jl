@@ -64,6 +64,8 @@ function SchurKKTSystem{T, VI, VT, MT}(
     )
 end
 
+Base.size(kkt::SchurKKTSystem, n::Int) = size(kkt.inner, n)
+Base.size(kkt::SchurKKTSystem) = size(kkt.inner)
 MadNLP.num_variables(kkt::SchurKKTSystem) = kkt.inner.nu
 MadNLP.get_hessian(kkt::SchurKKTSystem) = MadNLP.get_hessian(kkt.inner)
 MadNLP.get_jacobian(kkt::SchurKKTSystem) = MadNLP.get_jacobian(kkt.inner)
@@ -128,7 +130,7 @@ end
 
 function MadNLP.solve_refine_wrapper!(
     ips::MadNLP.InteriorPointSolver{<:SchurKKTSystem{T,VI,VT,MT}},
-    x_h, b_h,
+    x_r::MadNLP.AbstractKKTVector, b_r::MadNLP.AbstractKKTVector,
 ) where {T, VI, VT, MT}
     comm = ips.kkt.comm
     kkt = ips.kkt.inner
@@ -141,6 +143,8 @@ function MadNLP.solve_refine_wrapper!(
     ns = length(kkt.ind_ineq)
     n = nx + nu + ns # local number of variables, replace ips.n
 
+    x_h = MadNLP.full(x_r)
+    b_h = MadNLP.full(b_r)
     # Transfer
     shift_x = id * nx
     shift_u = nblocks * nx

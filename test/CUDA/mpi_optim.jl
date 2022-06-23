@@ -46,7 +46,7 @@ end
 #=
     Data
 =#
-include("config.jl")
+include(joinpath("..", "config.jl"))
 
 
 #=

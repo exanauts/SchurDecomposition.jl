@@ -298,3 +298,11 @@ function MadNLP.regularize_diagonal!(kkt::SchurKKTSystem, primal, dual)
     _synchronize_regularization!(kkt)
 end
 
+
+# Utils
+function Argos.BatchReduction(polar::ExaPF.AbstractPolarFormulation{T, VI, VT, MT}, S, nx, nu, nbatch) where {T, VI, VT, MT}
+    z   = MT(undef, nx, nbatch) ; fill!(z, zero(T))
+    ψ   = MT(undef, nx, nbatch) ; fill!(ψ, zero(T))
+    v  = MT(undef, nu, nbatch)  ; fill!(v, zero(T))
+    return Argos.BatchReduction(nbatch, z, ψ, v, S)
+end

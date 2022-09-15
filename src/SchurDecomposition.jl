@@ -5,6 +5,7 @@ import MPI
 import LinearAlgebra: mul!, ldiv!, axpy!
 import MadNLP
 import NLPModels
+import ExaPF
 import Argos
 
 import CUDA

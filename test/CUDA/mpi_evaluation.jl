@@ -2,13 +2,14 @@ using SchurDecomposition
 using LazyArtifacts
 using DelimitedFiles
 using Argos
+using ArgosCUDA
 using NLPModels
+using CUDA
 using CUDAKernels
 
 import MPI
 MPI.Init()
 
-include(joinpath(dirname(pathof(Argos)), "..", "test", "cusolver.jl"))
 
 #=
     MPI config

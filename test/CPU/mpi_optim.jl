@@ -48,10 +48,10 @@ NLPModels.jac_coord!(blk, x0, jac)
     Step 2: Launch optimization
 =#
 
-linear_solver=MadNLPLapackCPU
+linear_solver=LapackCPUSolver
 verbose = is_master ? MadNLP.DEBUG : MadNLP.ERROR
 
-options = Dict{Symbol, Any}(
+madnlp_options = Dict{Symbol, Any}(
     :tol=>1e-5,
     :max_iter=>max_iter,
     :nlp_scaling=>scaling,
@@ -59,11 +59,10 @@ options = Dict{Symbol, Any}(
     :linear_solver=>linear_solver,
     :dual_initialized=>true,
 )
-madopt = MadNLP.Options(linear_solver=linear_solver)
-MadNLP.set_options!(madopt, options, Dict())
+opt_ipm, opt_linear, logger = MadNLP.load_options(; madnlp_options...)
 
 KKT = SchurDecomposition.SchurKKTSystem{Float64, Vector{Int}, Vector{Float64}, Matrix{Float64}}
-ipp = MadNLP.InteriorPointSolver{KKT}(blk, madopt; option_linear_solver=options)
-MadNLP.optimize!(ipp)
+ipp = MadNLP.MadNLPSolver{Float64, KKT}(blk, opt_ipm, opt_linear; logger=logger)
+MadNLP.solve!(ipp)
 
 MPI.Finalize()

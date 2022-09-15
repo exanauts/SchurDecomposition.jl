@@ -17,7 +17,7 @@
 
 =#
 
-struct SchurKKTSystem{T, VI, VT, MT} <: MadNLP.AbstractReducedKKTSystem{T, MT}
+struct SchurKKTSystem{T, VI, VT, MT} <: MadNLP.AbstractReducedKKTSystem{T, VT, MT}
     inner::Argos.BieglerKKTSystem{T, VI, VT, MT}
     id::Int
     nblocks::Int
@@ -129,7 +129,7 @@ function MadNLP.build_kkt!(kkt::SchurKKTSystem)
 end
 
 function MadNLP.solve_refine_wrapper!(
-    ips::MadNLP.InteriorPointSolver{<:SchurKKTSystem{T,VI,VT,MT}},
+    ips::MadNLP.MadNLPSolver{T, <:SchurKKTSystem{T,VI,VT,MT}},
     x_r::MadNLP.AbstractKKTVector, b_r::MadNLP.AbstractKKTVector,
 ) where {T, VI, VT, MT}
     comm = ips.kkt.comm
@@ -283,7 +283,7 @@ function _synchronize_regularization!(kkt::SchurKKTSystem)
     copyto!(kkt.inner.du_diag, 1, kkt.du_diag, shift_c+1, m)
 end
 
-function MadNLP.set_aug_diagonal!(kkt::SchurKKTSystem, ips::MadNLP.InteriorPointSolver)
+function MadNLP.set_aug_diagonal!(kkt::SchurKKTSystem, ips::MadNLP.MadNLPSolver)
     _pr_diag = zeros(length(kkt.pr_diag))
     # Global regularization
     _pr_diag .= ips.zl./(ips.x.-ips.xl) .+ ips.zu./(ips.xu.-ips.x)

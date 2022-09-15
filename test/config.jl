@@ -1,5 +1,5 @@
 
-const DATA = "../matpower/data/" #joinpath(artifact"ExaData", "ExaData")
+const DATA = joinpath(artifact"ExaData", "ExaData")
 const DEMANDS = joinpath(artifact"ExaData", "ExaData", "mp_demand")
 
 casename = "case118"

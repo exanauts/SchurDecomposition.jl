@@ -6,6 +6,7 @@ using SchurDecomposition
 using LazyArtifacts
 using DelimitedFiles
 using Argos
+using ArgosCUDA
 using NLPModels
 using MadNLP
 using MadNLPGPU
@@ -15,9 +16,6 @@ using CUDA
 using CUDAKernels
 
 # Load GPU utils
-include(joinpath(dirname(pathof(Argos)), "..", "test", "cusolver.jl"))
-
-
 CUDA.allowscalar(false)
 N_GPU = CUDA.ndevices()
 
@@ -81,7 +79,7 @@ NLPModels.jac_coord!(blk, x0, jac)
     Step 2: Launch optimization
 =#
 
-linear_solver = MadNLPLapackGPU
+linear_solver = LapackGPUSolver
 verbose = is_master ? MadNLP.DEBUG : MadNLP.ERROR
 
 
@@ -91,28 +89,27 @@ VT = CuVector{T}
 MT = CuMatrix{T}
 
 KKT = SchurDecomposition.SchurKKTSystem{T, VI, VT, MT}
+madnlp_options = Dict{Symbol, Any}(
+    :tol=>1e-5,
+    :max_iter=>max_iter,
+    :nlp_scaling=>scaling,
+    :print_level=>verbose,
+    :linear_solver=>linear_solver,
+    :dual_initialized=>true,
+    :lapack_algorithm=>MadNLP.CHOLESKY,
+)
+opt_ipm, opt_linear, logger = MadNLP.load_options(; madnlp_options...)
 
 for i in 1:ntrials
     GC.gc(true)
     CUDA.reclaim()
-    options = Dict{Symbol, Any}(
-        :tol=>1e-5,
-        :max_iter=>max_iter,
-        :nlp_scaling=>scaling,
-        :print_level=>verbose,
-        :linear_solver=>linear_solver,
-        :lapackgpu_algorithm=>MadNLPLapackGPU.CHOLESKY,
-        :dual_initialized=>true,
-    )
-    madopt = MadNLP.Options(linear_solver=linear_solver)
-    MadNLP.set_options!(madopt, copy(options), Dict())
-    ipp = MadNLP.InteriorPointSolver{KKT}(blk, madopt; option_linear_solver=options)
+    ipp = MadNLP.MadNLPSolver{Float64, KKT}(blk, opt_ipm, opt_linear; logger=logger)
     if id == root
         @info "Optim"
         CUDA.memory_status()
         println()
     end
-    MadNLP.optimize!(ipp)
+    MadNLP.solve!(ipp)
 end
 
 MPI.Finalize()

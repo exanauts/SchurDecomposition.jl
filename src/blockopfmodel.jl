@@ -27,13 +27,12 @@ struct BlockOPFModel <: NLPModels.AbstractNLPModel{Float64, Vector{Float64}}
 end
 
 function BlockOPFModel(
-    datafile::String,
+    model::ExaPF.PolarForm,
     ploads::Array{Float64, 2},
     qloads::Array{Float64, 2},
     id::Int,
     nscen::Int,
     nblocks::Int;
-    device=KA.CPU(),
     comm=nothing,
 )
     @assert nscen % nblocks == 0
@@ -42,8 +41,8 @@ function BlockOPFModel(
     span = (shift+1):(shift+Δ)
     pl = ploads[:, span]
     ql = qloads[:, span]
-    nlp = Argos.StochEvaluator(datafile, pl, ql; device=device)
-    model = if isa(device, KA.CPU)
+    nlp = Argos.StochEvaluator(model, pl, ql)
+    model = if isa(model.device, KA.CPU)
         Argos.OPFModel(nlp)
     else
         Argos.OPFModel(Argos.bridge(nlp))
@@ -102,6 +101,26 @@ function BlockOPFModel(
         Argos.NLPTimers(),
         comm,
         Dict{Symbol, Any}(),
+    )
+end
+function BlockOPFModel(
+    casename::String,
+    ploads::Array{Float64, 2},
+    qloads::Array{Float64, 2},
+    id::Int,
+    nscen::Int,
+    nblocks::Int;
+    device=CPU(),
+    comm=nothing,
+)
+    return BlockOPFModel(
+        ExaPF.PolarForm(casename, device),
+        ploads,
+        qloads,
+        id,
+        nscen,
+        nblocks;
+        comm=comm,
     )
 end
 

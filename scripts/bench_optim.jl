@@ -9,8 +9,8 @@ function bench_optim(model, nscen; ntrials=3)
     obj = 0
 
     # Warm-up
-    solver = build_solver(blk)
-    MadNLP.solve!(solver; max_iter=1)
+    solver = build_solver(blk; max_iter=1)
+    MadNLP.solve!(solver)
     for _ in 1:ntrials
         solver = build_solver(blk)
         MadNLP.solve!(solver)
@@ -29,7 +29,7 @@ function bench_optim(model, nscen; ntrials=3)
     )
 end
 
-function run_benchmark_optim(casename; nscens=[10, 20, 30, 60])
+function run_benchmark_optim(casename; nscens=[10, 20, 30, 60, 120, 240])
     datafile = joinpath(DATA, "$(casename).m")
     model = ExaPF.PolarForm(datafile, DEVICE)
     nexp = length(nscens)
@@ -46,11 +46,14 @@ function run_benchmark_optim(casename; nscens=[10, 20, 30, 60])
         if !isdir(output_dir)
             mkdir(output_dir)
         end
-        output_file = joinpath(output_dir, "$(casename)_optim.txt")
+        output_file = joinpath(output_dir, "$(casename)_optim_$(nblk)_$(dev).txt")
         writedlm(output_file, results)
     end
     return results
 end
 
-run_benchmark_optim("case57")
+run_benchmark_optim("case118"; nscens=[512, 1024])
+# run_benchmark_optim("case300")
+# run_benchmark_optim("case1354pegase"; nscens=[10, 20, 30, 60, 120])
+# run_benchmark_optim("case9241pegase"; nscens=[2, 4, 10])
 

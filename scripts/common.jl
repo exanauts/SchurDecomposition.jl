@@ -9,6 +9,9 @@ using MPI
 using NLPModels
 using Random
 using SchurDecomposition
+using ArgosCUDA
+using MadNLPGPU
+using CUDAKernels
 
 #=
     PARAMETERS
@@ -21,16 +24,15 @@ SAVE_RESULTS = true
 #=
     DEVICE
 =#
-DEVICE = CPU()
-LAPACK_SOLVER = LapackCPUSolver
-
-#=
-    CUDA config
-=#
-if CUDA.has_cuda()
-    CUDA.device!(id % 2)
-    CUDA.allowscalar(false)
+dev = :cuda
+if dev == :cpu
+    DEVICE = CPU()
+    LAPACK_SOLVER = LapackCPUSolver
+elseif dev == :cuda
+    DEVICE = CUDADevice()
+    LAPACK_SOLVER = LapackGPUSolver
 end
+
 
 #=
     MPI config
@@ -42,7 +44,14 @@ root = 0
 nblk = MPI.Comm_size(comm)
 id = MPI.Comm_rank(comm)
 is_master = (MPI.Comm_rank(comm) == root)
-#
+
+#=
+    CUDA config
+=#
+if CUDA.has_cuda()
+    CUDA.device!(id % 2)
+    CUDA.allowscalar(false)
+end
 
 #=
     UTILS FUNCTION
@@ -62,8 +71,8 @@ end
 function generate_loads(model, nscen, magnitude)
     nbus = get(model, ExaPF.PS.NumberOfBuses())
     stack = ExaPF.NetworkStack(model)
-    pload_det = stack.pload
-    qload_det = stack.qload
+    pload_det = stack.pload |> Array
+    qload_det = stack.qload |> Array
 
     has_load = (pload_det .> 0)
 
@@ -89,18 +98,30 @@ function instantiate_model!(blk::SchurDecomposition.BlockOPFModel)
     return
 end
 
-function build_solver(blk::SchurDecomposition.BlockOPFModel)
+function build_solver(blk::SchurDecomposition.BlockOPFModel; max_iter=250)
+    nlp = Argos.backend(blk.model)
     madnlp_options = Dict{Symbol, Any}(
         :dual_initialized=>true,
         :lapack_algorithm=>MadNLP.CHOLESKY,
         :linear_solver=>LAPACK_SOLVER,
-        :max_iter=>250,
+        :max_iter=>max_iter,
         :print_level=>MadNLP.ERROR,
         :tol=>1e-5,
     )
     opt_ipm, opt_linear, logger = MadNLP.load_options(; madnlp_options...)
+    if dev == :cuda
+        T = Float64
+        VI = CuVector{Int}
+        VT = CuVector{T}
+        MT = CuMatrix{T}
+    else
+        T = Float64
+        VI = Vector{Int}
+        VT = Vector{T}
+        MT = Matrix{T}
+    end
 
-    KKT = SchurDecomposition.SchurKKTSystem{Float64, Vector{Int}, Vector{Float64}, Matrix{Float64}}
+    KKT = SchurDecomposition.SchurKKTSystem{T, VI, VT, MT}
     return MadNLP.MadNLPSolver{Float64, KKT}(blk, opt_ipm, opt_linear; logger=logger)
 end
 

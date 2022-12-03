@@ -42,7 +42,7 @@ function bench_callbacks(model, nscen; ntrials=10)
     return (tobj, tcons, tgrad, tjac, thess)
 end
 
-function run_benchmark_callbacks(casename, nscens=[1, 10, 20, 30, 60, 120, 240])
+function run_benchmark_callbacks(casename, nscens=[10, 20, 30, 60, 120, 240])
     datafile = joinpath(DATA, "$(casename).m")
     model = ExaPF.PolarForm(datafile, DEVICE)
     nexp = length(nscens)
@@ -58,7 +58,7 @@ function run_benchmark_callbacks(casename, nscens=[1, 10, 20, 30, 60, 120, 240])
         if !isdir(output_dir)
             mkdir(output_dir)
         end
-        output_file = joinpath(output_dir, "$(casename)_callbacks.txt")
+        output_file = joinpath(output_dir, "$(casename)_callbacks_$(nblk)_$(dev).txt")
         writedlm(output_file, results)
     end
     return results

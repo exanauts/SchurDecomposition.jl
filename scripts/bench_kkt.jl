@@ -22,7 +22,7 @@ function bench_kkt(model, nscen; ntrials=10)
     )
 end
 
-function run_benchmark_kkt(casename; nscens=[1, 10, 20, 30, 60, 120, 240])
+function run_benchmark_kkt(casename; nscens=[10, 20, 30, 60, 120, 240])
     datafile = joinpath(DATA, "$(casename).m")
     model = ExaPF.PolarForm(datafile, DEVICE)
     nexp = length(nscens)
@@ -38,11 +38,12 @@ function run_benchmark_kkt(casename; nscens=[1, 10, 20, 30, 60, 120, 240])
         if !isdir(output_dir)
             mkdir(output_dir)
         end
-        output_file = joinpath(output_dir, "$(casename)_kkt.txt")
+        output_file = joinpath(output_dir, "$(casename)_kkt_$(nblk)_$(dev).txt")
         writedlm(output_file, results)
     end
     return results
 end
 
-run_benchmark_kkt("case57")
+# run_benchmark_kkt("case1354pegase")
+run_benchmark_kkt("case9241pegase"; nscens=[10, 20])
 

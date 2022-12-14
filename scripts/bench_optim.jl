@@ -30,12 +30,14 @@ function bench_optim(model, nscen; ntrials=3)
 end
 
 function run_benchmark_optim(casename; nscens=[10, 20, 30, 60, 120, 240])
+    @info "Benchmark $casename"
     datafile = joinpath(DATA, "$(casename).m")
     model = ExaPF.PolarForm(datafile, DEVICE)
     nexp = length(nscens)
 
     results = zeros(nexp, 6)
     for (i, k) in enumerate(nscens)
+        println("    nscens=$(k)")
         r = bench_optim(model, k)
         results[i, :] .= (k, r.iters, r.obj, r.total, r.callbacks, r.linear_solver)
         refresh_memory()
@@ -52,8 +54,8 @@ function run_benchmark_optim(casename; nscens=[10, 20, 30, 60, 120, 240])
     return results
 end
 
-run_benchmark_optim("case118"; nscens=[512, 1024])
-# run_benchmark_optim("case300")
-# run_benchmark_optim("case1354pegase"; nscens=[10, 20, 30, 60, 120])
-# run_benchmark_optim("case9241pegase"; nscens=[2, 4, 10])
+run_benchmark_optim("case118"; nscens=[2^i for i in 3:11])
+run_benchmark_optim("case1354pegase"; nscens=[8])
+run_benchmark_optim("case2869pegase"; nscens=[8])
+run_benchmark_optim("case9241pegase"; nscens=[8])
 

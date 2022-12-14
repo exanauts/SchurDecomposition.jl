@@ -44,6 +44,5 @@ function run_benchmark_kkt(casename; nscens=[10, 20, 30, 60, 120, 240])
     return results
 end
 
-# run_benchmark_kkt("case1354pegase")
-run_benchmark_kkt("case9241pegase"; nscens=[10, 20])
+run_benchmark_kkt("case1354pegase"; nscens=[2^i for i in 3:9])
 

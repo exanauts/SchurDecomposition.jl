@@ -64,5 +64,5 @@ function run_benchmark_callbacks(casename, nscens=[10, 20, 30, 60, 120, 240])
     return results
 end
 
-run_benchmark_callbacks("case1354pegase")
+run_benchmark_callbacks("case1354pegase", [2^i for i in 3:9])
 

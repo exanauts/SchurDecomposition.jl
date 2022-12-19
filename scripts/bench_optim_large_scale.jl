@@ -54,5 +54,5 @@ function run_benchmark_optim(casename; nscens=[10, 20, 30, 60, 120, 240])
     return results
 end
 
-run_benchmark_optim("case9241pegase"; nscens=[64])
+run_benchmark_optim("case1354pegase"; nscens=[512])
 

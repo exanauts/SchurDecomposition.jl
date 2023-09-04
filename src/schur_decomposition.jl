@@ -17,7 +17,7 @@
 
 =#
 
-struct SchurKKTSystem{T, VI, VT, MT} <: MadNLP.AbstractReducedKKTSystem{T, VT, MT}
+struct SchurKKTSystem{T, VI, VT, MT} <: MadNLP.AbstractReducedKKTSystem{T, VT, MT, MadNLP.ExactHessian{T, VT}}
     inner::Argos.BieglerKKTSystem{T, VI, VT, MT}
     id::Int
     nblocks::Int
@@ -284,9 +284,15 @@ function _synchronize_regularization!(kkt::SchurKKTSystem)
 end
 
 function MadNLP.set_aug_diagonal!(kkt::SchurKKTSystem, ips::MadNLP.MadNLPSolver)
+    # Load data
+    x = MadNLP.full(ips.x)
+    xl = MadNLP.full(ips.xl)
+    xu = MadNLP.full(ips.xu)
+    zl = MadNLP.full(ips.zl)
+    zu = MadNLP.full(ips.zu)
     _pr_diag = zeros(length(kkt.pr_diag))
     # Global regularization
-    _pr_diag .= ips.zl./(ips.x.-ips.xl) .+ ips.zu./(ips.xu.-ips.x)
+    _pr_diag .= zl./(x.-xl) .+ zu./(xu.-x)
     copyto!(kkt.pr_diag, _pr_diag)
     fill!(kkt.du_diag, 0.0)
     _synchronize_regularization!(kkt)
@@ -298,11 +304,3 @@ function MadNLP.regularize_diagonal!(kkt::SchurKKTSystem, primal, dual)
     _synchronize_regularization!(kkt)
 end
 
-
-# Utils
-function Argos.BatchReduction(polar::ExaPF.AbstractPolarFormulation{T, VI, VT, MT}, S, nx, nu, nbatch) where {T, VI, VT, MT}
-    z   = MT(undef, nx, nbatch) ; fill!(z, zero(T))
-    ψ   = MT(undef, nx, nbatch) ; fill!(ψ, zero(T))
-    v  = MT(undef, nu, nbatch)  ; fill!(v, zero(T))
-    return Argos.BatchReduction(nbatch, z, ψ, v, S)
-end

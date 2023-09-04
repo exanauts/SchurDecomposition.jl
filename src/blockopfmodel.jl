@@ -110,7 +110,7 @@ function BlockOPFModel(
     id::Int,
     nscen::Int,
     nblocks::Int;
-    device=CPU(),
+    device=KA.CPU(),
     comm=nothing,
 )
     return BlockOPFModel(

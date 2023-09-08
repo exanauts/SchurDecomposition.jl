@@ -8,6 +8,7 @@ using MadNLP
 using NLPModels
 using FiniteDiff
 using SchurDecomposition
+using SparseArrays
 
 const DATA = joinpath(artifact"ExaData", "ExaData")
 const DEMANDS = joinpath(artifact"ExaData", "ExaData", "mp_demand")

@@ -2,7 +2,7 @@ module SchurDecomposition
 
 import MPI
 
-import LinearAlgebra: mul!, ldiv!, axpy!
+import LinearAlgebra: mul!, ldiv!, axpy!, norm, Symmetric
 import SparseArrays: SparseMatrixCSC, sparse
 import MadNLP
 import MadNLPHSL

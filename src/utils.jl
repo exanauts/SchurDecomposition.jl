@@ -85,6 +85,15 @@ function split_kkt_system(W::SparseMatrixCSC, nx::Int, nu::Int)
     )
 end
 
+function symmetrize!(A::AbstractMatrix)
+    n = size(A, 1)
+    for i in 1:n, j in 1:i
+        val = (A[i, j] + A[j, i]) / 2.0
+        A[i, j] = val
+        A[j, i] = val
+    end
+end
+
 #=
     Multi-RHS
 =#
@@ -121,7 +130,7 @@ end
 
 function solve!(rsol::MultipleRHSSolver, X::AbstractMatrix)
     M = rsol.solver
-    n , m = size(X)
+    n, m = size(X)
     @assert m == size(rsol.V, 2)
     nrhs = m
 

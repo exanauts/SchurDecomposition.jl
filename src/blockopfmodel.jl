@@ -215,16 +215,16 @@ function MadNLP.scale_constraints!(
     jac::MadNLP.SparseMatrixCOO; # Ji
     max_gradient=1e-8,
 )
-    m = size(jac, 1) # number of local constraints
-    shift_c = opf.id * m
-    fill!(con_scale, 0.0)
-    for i in 1:length(jac.I)
-        row = @inbounds jac.I[i]
-        @assert 1 <= row <= m
-        @inbounds con_scale[row+shift_c] = max(con_scale[row+shift_c], abs(jac.V[i]))
-    end
+    # m = size(jac, 1) # number of local constraints
+    # shift_c = opf.id * m
+    # fill!(con_scale, 0.0)
+    # for i in 1:length(jac.I)
+    #     row = @inbounds jac.I[i]
+    #     @assert 1 <= row <= m
+    #     @inbounds con_scale[row+shift_c] = max(con_scale[row+shift_c], abs(jac.V[i]))
+    # end
 
-    comm_sum!(con_scale, opf.comm)
-    con_scale .= min.(1.0, max_gradient ./ con_scale)
+    # comm_sum!(con_scale, opf.comm)
+    con_scale .= 0.01 #min.(1.0, max_gradient ./ con_scale)
 end
 

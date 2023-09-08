@@ -38,6 +38,8 @@ struct ParallelKKTSystem{T, VT, MT} <: MadNLP.AbstractReducedKKTSystem{T, VT, MT
     du_diag::VT
     # Buffers
     # TODO
+    _w::VT
+    _v::VT
     _w1::VT
     _w2::VT
     _w3::VT
@@ -84,7 +86,6 @@ function ParallelKKTSystem{T, VT, MT}(
     Ki = sparse(res.i_Ki, res.j_Ki, convert.(Float64, res.mapKi))
     Bi = sparse(res.i_Bi, res.j_Bi, convert.(Float64, res.mapBi), nki, n_coupling)
 
-    nw = n + ns + m
     @assert size(Ki, 1) == size(kkt.aug_com, 1) - n_coupling
 
     # Get ordering in CSC matrices
@@ -93,13 +94,15 @@ function ParallelKKTSystem{T, VT, MT}(
     mapBi = Bi.nzval .|> Int
 
     # Buffers
-    _w1 = zeros(nki)
-    _w2 = zeros(nki)
-    _w3 = zeros(n_coupling)
-    _w4 = zeros(n_coupling)
+    nw = n + ns + m
+    _w = zeros(nw)
+    _v = zeros(nw)
+    _w1 = MadNLP._madnlp_unsafe_wrap(_w, nki)
+    _w2 = MadNLP._madnlp_unsafe_wrap(_v, nki)
+    _w3 = MadNLP._madnlp_unsafe_wrap(_w, n_coupling, nki+1)
+    _w4 = MadNLP._madnlp_unsafe_wrap(_v, n_coupling, nki+1)
     _w5 = zeros(m)
     _w6 = zeros(n+ns)
-
 
     nrhs = n_coupling
     sparse_solver = MadNLPHSL.Ma57Solver(Ki)
@@ -107,7 +110,8 @@ function ParallelKKTSystem{T, VT, MT}(
 
     return ParallelKKTSystem{T, VT, MT}(
         kkt, S, Ki, K0, Bi, n, m, ns, n_coupling, mapKi, mapK0, mapBi,
-        id, nblocks, pr_diag, du_diag, _w1, _w2, _w3, _w4, _w5, _w6, rsol, sparse_solver, comm,
+        id, nblocks, pr_diag, du_diag,
+        _w, _v, _w1, _w2, _w3, _w4, _w5, _w6, rsol, sparse_solver, comm,
     )
 end
 
@@ -131,8 +135,59 @@ function MadNLP.set_jacobian_scaling!(kkt::ParallelKKTSystem{T,VT,MT}, constrain
     return
 end
 
-function MadNLP.mul!(y::AbstractVector, kkt::ParallelKKTSystem, x::AbstractVector)
-    mul!(y, kkt.inner, x)
+function _mul_expanded!(y::AbstractVector, kkt::ParallelKKTSystem, x::AbstractVector)
+    nu = kkt.n_coupling
+    nx = kkt.n - nu
+    m = kkt.m
+    ns = kkt.n_ineq
+
+    shift_x = kkt.id * nx
+    shift_u = kkt.nblocks * nx
+    shift_s = kkt.nblocks * nx + nu + kkt.id * ns
+    shift_y = kkt.nblocks * (nx + ns) + nu + kkt.id * m
+
+    # Local buffers
+    _y = kkt._w1
+    _x = kkt._w2
+    _yu = kkt._w3
+    _xu = kkt._w4
+    fill!(_y, 0.0)
+    fill!(_yu, 0.0)
+    fill!(y, 0.0)
+
+    # Copy values to local arrays.
+    copyto!(_x,       1, x, shift_x + 1, nx)
+    copyto!(_x,    nx+1, x, shift_s + 1, ns)
+    copyto!(_x, nx+ns+1, x, shift_y + 1, m)
+    copyto!(_xu, 1, x, shift_u + 1, nu)
+
+    # Multiplication with local KKT system.
+    mul!(_y, Symmetric(kkt.Ki, :L), _x)
+    mul!(_y, kkt.Bi, _xu, 1.0, 1.0)
+
+    mul!(_yu, Symmetric(kkt.K0, :L), _xu)
+    mul!(_yu, kkt.Bi', _x, 1.0, 1.0)
+
+    # Copy values back to global array.
+    copyto!(y, shift_x + 1, _y,       1, nx)
+    copyto!(y, shift_s + 1, _y,    nx+1, ns)
+    copyto!(y, shift_y + 1, _y, ns+nx+1, m )
+    copyto!(y, shift_u + 1, _yu, 1, nu )
+
+    comm_sum!(y, kkt.comm)
+    return
+end
+
+function mul!(y::AbstractVector, kkt::ParallelKKTSystem, x::AbstractVector)
+    if size(kkt.inner, 1) == length(x) == length(y)
+        mul!(y, kkt.inner, x)
+    else
+        _mul_expanded!(y, kkt, x)
+    end
+end
+
+function mul!(y::MadNLP.AbstractKKTVector, kkt::ParallelKKTSystem, x::MadNLP.AbstractKKTVector)
+    mul!(MadNLP.primal_dual(y), kkt, MadNLP.primal_dual(x))
 end
 
 function MadNLP.jtprod!(
@@ -184,31 +239,29 @@ function MadNLP.build_kkt!(kkt::ParallelKKTSystem)
     copyto!(kkt.sparse_solver.csc.nzval, kkt.Ki.nzval)
     MadNLP.factorize!(kkt.sparse_solver)
 
-    kkt.S .= kkt.K0                         #  S = K₀
+    kkt.S .= Symmetric(kkt.K0, :L)          #  S = K₀
     KBi = solve!(kkt.rsol, kkt.Bi)          #  KBi = Kᵢ⁻¹ Bᵢ
     mul!(kkt.S, kkt.Bi', KBi, -1.0, 1.0)    #  S += - Bᵢᵀ Kᵢ⁻¹ Bᵢ
 
     # Assemble Schur complement (reduction) on all processes
     comm_sum!(kkt.S, kkt.comm)
+    symmetrize!(kkt.S)
+
     return
 end
 
-function MadNLP.solve_refine_wrapper!(
-    solver::MadNLP.MadNLPSolver{T, <:ParallelKKTSystem{T,VT,MT}},
-    x_r::MadNLP.AbstractKKTVector, b_r::MadNLP.AbstractKKTVector,
-) where {T, VT, MT}
+function backsolve!(
+    x_h::AbstractVector, solver::MadNLP.MadNLPSolver, b_h::AbstractVector,
+)
     kkt = solver.kkt
     comm = kkt.comm
     # MPI
-    id = solver.kkt.id
-    nblocks = solver.kkt.nblocks
+    id = kkt.id
+    nblocks = kkt.nblocks
     m = kkt.m
-    nu = solver.kkt.n_coupling
+    nu = kkt.n_coupling
     nx = kkt.n - nu
     ns = kkt.n_ineq
-
-    x_h = MadNLP.full(x_r)
-    b_h = MadNLP.full(b_r)
 
     # Transfer
     shift_x = id * nx
@@ -216,10 +269,10 @@ function MadNLP.solve_refine_wrapper!(
     shift_s = nblocks * nx + nu + id * ns
     shift_y = nblocks * (nx + ns) + nu + id * m
 
-    _x = solver.kkt._w1
-    _b = solver.kkt._w2
-    _xu = solver.kkt._w3
-    _bu = solver.kkt._w4
+    _x = kkt._w1
+    _b = kkt._w2
+    _xu = kkt._w3
+    _bu = kkt._w4
 
     # Initiate RHS
     copyto!(_b,       1, b_h, shift_x + 1, nx)
@@ -233,10 +286,9 @@ function MadNLP.solve_refine_wrapper!(
     # Step 1. Assemble RHS for Schur-complement
     _bu ./= nblocks
     _x .= _b
-    MadNLP.solve!(solver.kkt.sparse_solver, _x)
-    mul!(_bu, solver.kkt.Bi', _x, -1.0, 1.0)
+    MadNLP.solve!(kkt.sparse_solver, _x)
+    mul!(_bu, kkt.Bi', _x, -1.0, 1.0)
     _xu .= _bu
-    # Sum contributions across all processes
     comm_sum!(_xu, comm)
 
     # Step 2. Evaluate direction w.r.t. u
@@ -247,12 +299,12 @@ function MadNLP.solve_refine_wrapper!(
     # Step 3. Individual contribution
     _x .= _b
     mul!(_x, kkt.Bi, _xu, -1.0, 1.0)
-    MadNLP.solve!(solver.kkt.sparse_solver, _x)
+    MadNLP.solve!(kkt.sparse_solver, _x)
 
     # TODO
     # MadNLP.fixed_variable_treatment_vec!(x, ips.ind_fixed)
 
-    fill!(x_h, zero(T))
+    fill!(x_h, 0.0)
     # / x
     copyto!(x_h, shift_x + 1, _x,       1, nx)
     copyto!(x_h, shift_s + 1, _x,    nx+1, ns)
@@ -266,6 +318,45 @@ function MadNLP.solve_refine_wrapper!(
     comm_sum!(x_h, comm)
 
     return true
+end
+
+function MadNLP.solve_refine_wrapper!(
+    solver::MadNLP.MadNLPSolver{T, <:ParallelKKTSystem{T,VT,MT}},
+    x_r::MadNLP.AbstractKKTVector, b_r::MadNLP.AbstractKKTVector,
+) where {T, VT, MT}
+    x = MadNLP.primal_dual(x_r)
+    b = MadNLP.primal_dual(b_r)
+    res = zeros(length(b))
+    rep = zeros(length(b))
+    norm_b = norm(b, Inf)
+
+    fill!(res, zero(T))
+    fill!(x, zero(T))
+
+    axpy!(-1, b, res)                        # ϵ = -b
+
+    iter = 0
+    residual_ratio = Inf
+    noprogress = 0
+
+    max_iter = 10
+    tol = 1e-10
+
+    while true
+        if (iter > max_iter) || (residual_ratio < tol)
+            break
+        end
+        iter += 1
+
+        rep .= res
+        backsolve!(res, solver, rep)        # ϵ = -A⁻¹ b
+        axpy!(-1, res, x)                   # x = x + A⁻¹ b
+        mul!(res, solver.kkt, x)            # ϵ = A x
+        axpy!(-1, b, res)                   # ϵ = Ax - b
+        norm_res = norm(res, Inf)
+        residual_ratio = norm_res / (one(T)+norm_b)
+    end
+    return (residual_ratio < tol)
 end
 
 # set_aug_diagonal
@@ -318,3 +409,4 @@ end
 function MadNLP.is_inertia_correct(kkt::ParallelKKTSystem, num_pos, num_zero, num_neg)
     return num_pos == kkt.n_coupling
 end
+

@@ -49,6 +49,7 @@ struct ParallelKKTSystem{T, VT, MT} <: MadNLP.AbstractReducedKKTSystem{T, VT, MT
     rsol::MultipleRHSSolver{T}
     sparse_solver::MadNLPHSL.Ma57Solver
     comm::Union{MPI.Comm, Nothing}
+    etc::Dict{Symbol, Any}
 end
 
 function ParallelKKTSystem{T, VT, MT}(
@@ -108,10 +109,15 @@ function ParallelKKTSystem{T, VT, MT}(
     sparse_solver = MadNLPHSL.Ma57Solver(Ki)
     rsol = MultipleRHSSolver(sparse_solver, nrhs)
 
+    etc = Dict{Symbol, Any}()
+    etc[:reduction] = 0.0
+    etc[:comm] = 0.0
+    etc[:backsolve] = 0.0
+
     return ParallelKKTSystem{T, VT, MT}(
         kkt, S, Ki, K0, Bi, n, m, ns, n_coupling, mapKi, mapK0, mapBi,
         id, nblocks, pr_diag, du_diag,
-        _w, _v, _w1, _w2, _w3, _w4, _w5, _w6, rsol, sparse_solver, comm,
+        _w, _v, _w1, _w2, _w3, _w4, _w5, _w6, rsol, sparse_solver, comm, etc,
     )
 end
 
@@ -174,7 +180,9 @@ function _mul_expanded!(y::AbstractVector, kkt::ParallelKKTSystem, x::AbstractVe
     copyto!(y, shift_y + 1, _y, ns+nx+1, m )
     copyto!(y, shift_u + 1, _yu, 1, nu )
 
+    tic = comm_walltime(kkt.comm)
     comm_sum!(y, kkt.comm)
+    kkt.etc[:comm] += comm_walltime(kkt.comm) - tic
     return
 end
 
@@ -220,7 +228,10 @@ function MadNLP.jtprod!(
     copyto!(y_h, shift_s+1, _y, nx+nu+1, ns)
 
     # Sum contributions
+    tic = comm_walltime(kkt.comm)
     comm_sum!(y_h, kkt.comm)
+    kkt.etc[:comm] += comm_walltime(kkt.comm) - tic
+    return
 end
 
 MadNLP.compress_jacobian!(kkt::ParallelKKTSystem) = MadNLP.compress_jacobian!(kkt.inner)
@@ -230,21 +241,25 @@ function MadNLP.build_kkt!(kkt::ParallelKKTSystem)
     MadNLP.build_kkt!(kkt.inner)
 
     # Update matrices
-    new_vals = kkt.inner.aug_com.nzval
-    kkt.Ki.nzval .= new_vals[kkt.mapKi]
-    kkt.K0.nzval .= new_vals[kkt.mapK0]
-    kkt.Bi.nzval .= new_vals[kkt.mapBi]
+    kkt.etc[:reduction] += @elapsed begin
+        new_vals = kkt.inner.aug_com.nzval
+        kkt.Ki.nzval .= new_vals[kkt.mapKi]
+        kkt.K0.nzval .= new_vals[kkt.mapK0]
+        kkt.Bi.nzval .= new_vals[kkt.mapBi]
 
-    # Update factorization
-    copyto!(kkt.sparse_solver.csc.nzval, kkt.Ki.nzval)
-    MadNLP.factorize!(kkt.sparse_solver)
+        # Update factorization
+        copyto!(kkt.sparse_solver.csc.nzval, kkt.Ki.nzval)
+        MadNLP.factorize!(kkt.sparse_solver)
 
-    kkt.S .= Symmetric(kkt.K0, :L)          #  S = K₀
-    KBi = solve!(kkt.rsol, kkt.Bi)          #  KBi = Kᵢ⁻¹ Bᵢ
-    mul!(kkt.S, kkt.Bi', KBi, -1.0, 1.0)    #  S += - Bᵢᵀ Kᵢ⁻¹ Bᵢ
+        kkt.S .= Symmetric(kkt.K0, :L)          #  S = K₀
+        KBi = solve!(kkt.rsol, kkt.Bi)          #  KBi = Kᵢ⁻¹ Bᵢ
+        mul!(kkt.S, kkt.Bi', KBi, -1.0, 1.0)    #  S += - Bᵢᵀ Kᵢ⁻¹ Bᵢ
+    end
 
     # Assemble Schur complement (reduction) on all processes
+    tic = comm_walltime(kkt.comm)
     comm_sum!(kkt.S, kkt.comm)
+    kkt.etc[:comm] += comm_walltime(kkt.comm) - tic
     symmetrize!(kkt.S)
 
     return
@@ -286,10 +301,14 @@ function backsolve!(
     # Step 1. Assemble RHS for Schur-complement
     _bu ./= nblocks
     _x .= _b
-    MadNLP.solve!(kkt.sparse_solver, _x)
+    kkt.etc[:backsolve] += @elapsed begin
+        MadNLP.solve!(kkt.sparse_solver, _x)
+    end
     mul!(_bu, kkt.Bi', _x, -1.0, 1.0)
     _xu .= _bu
+    tic = comm_walltime(kkt.comm)
     comm_sum!(_xu, comm)
+    kkt.etc[:comm] += comm_walltime(kkt.comm) - tic
 
     # Step 2. Evaluate direction w.r.t. u
     solver.cnt.linear_solver_time += @elapsed begin
@@ -299,7 +318,9 @@ function backsolve!(
     # Step 3. Individual contribution
     _x .= _b
     mul!(_x, kkt.Bi, _xu, -1.0, 1.0)
-    MadNLP.solve!(kkt.sparse_solver, _x)
+    kkt.etc[:backsolve] += @elapsed begin
+        MadNLP.solve!(kkt.sparse_solver, _x)
+    end
 
     # TODO
     # MadNLP.fixed_variable_treatment_vec!(x, ips.ind_fixed)
@@ -315,7 +336,9 @@ function backsolve!(
     # Scale coupling's direction by number of processes before summing it
     x_h[shift_u+1:shift_u+nu] ./= nblocks
 
+    tic = comm_walltime(kkt.comm)
     comm_sum!(x_h, comm)
+    kkt.etc[:comm] += comm_walltime(kkt.comm) - tic
 
     return true
 end

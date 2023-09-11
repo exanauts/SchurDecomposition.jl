@@ -79,3 +79,6 @@ comm_rank(comm::Nothing) = 0
 comm_barrier(comm::MPI.Comm) = MPI.Barrier(comm)
 comm_barrier(comm::Nothing) = nothing
 
+comm_walltime(comm::MPI.Comm) = MPI.Wtime()
+comm_walltime(comm::Nothing) = time()
+

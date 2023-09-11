@@ -66,6 +66,9 @@ for i in 1:ntrials
     GC.gc(true) # clean memory
     ipp = MadNLP.MadNLPSolver{Float64, KKT}(blk, opt_ipm, opt_linear; logger=logger)
     MadNLP.solve!(ipp)
+    if is_master
+        println(ipp.kkt.etc)
+    end
 end
 
 MPI.Finalize()

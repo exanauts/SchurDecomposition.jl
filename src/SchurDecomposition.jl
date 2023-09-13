@@ -19,6 +19,8 @@ include("utils.jl")
 include("communication.jl")
 include("blockopfmodel.jl")
 include("schur_decomposition.jl")
+
+include("schur_solver.jl")
 include("parallel_kkt.jl")
 
 end # module

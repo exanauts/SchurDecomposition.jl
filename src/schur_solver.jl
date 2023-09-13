@@ -1,0 +1,287 @@
+
+abstract type AbstractSchurSolver end
+
+#=
+    Ma57
+=#
+
+struct Ma57SchurSolver{T} <: AbstractSchurSolver
+    solver::MadNLPHSL.Ma57Solver
+    V::Matrix{T}
+    lwork::Vector{T}
+end
+
+function Ma57SchurSolver(Ki, Bi, K0; max_rhs=16)
+    nki = size(Ki, 1)
+    n_coupling = size(K0, 1)
+    # Check consistency
+    @assert size(K0, 2) == size(Bi, 2) == n_coupling
+    @assert size(Ki, 2) == size(Bi, 1) == nki
+
+    solver = MadNLPHSL.Ma57Solver(Ki)
+
+    nrhs = min(max_rhs, n_coupling)
+
+    # Build buffers
+    V = zeros(nki, nrhs)
+    lwork = zeros(nki * nrhs)
+    return Ma57SchurSolver(solver, V, lwork)
+end
+
+function _ma57cd!(
+    job::Cint,n::Cint,fact::Vector{Float64},lfact::Cint,
+    ifact::Vector{Cint},lifact::Cint,nrhs::Cint,rhs::Array{Float64},
+    lrhs::Cint,work::Vector{Float64},lwork::Cint,iwork::Vector{Cint},
+    icntl::Vector{Cint},info::Vector{Cint},
+)
+    ccall(
+        ("ma57cd_", MadNLPHSL.libhsl),
+        Nothing,
+        (Ref{Cint},Ref{Cint},Ptr{Float64},Ref{Cint},
+            Ptr{Cint},Ref{Cint},Ref{Cint},Ptr{Float64},
+            Ref{Cint},Ptr{Float64},Ref{Cint},Ptr{Cint},
+            Ptr{Cint},Ptr{Cint}),
+        job,n,fact,lfact,ifact,lifact,nrhs,rhs,lrhs,work,lwork,iwork,icntl,info,
+    )
+end
+
+function solve!(rsol::Ma57SchurSolver, X::AbstractMatrix)
+    M = rsol.solver
+    n, m = size(X)
+    @assert m == size(rsol.V, 2)
+    nrhs = m
+
+    rsol.V .= X
+    # Solve linear system with multiple right-hand-sides
+    _ma57cd!(
+        one(Int32),Int32(M.csc.n),M.fact,M.lfact,M.ifact,
+        M.lifact,Int32(nrhs),rsol.V,Int32(n),rsol.lwork,Int32(n*nrhs),M.iwork,M.icntl,M.info,
+    )
+    M.info[1] < 0 && throw(MadNLP.SolveException())
+    return rsol.V
+end
+
+function solve!(rsol::Ma57SchurSolver, x::AbstractVector)
+    return MadNLP.solve!(rsol.solver, x)
+end
+
+function schur_solve!(rsol::Ma57SchurSolver, S, Ki, Bi, K0)
+    # Update factorization
+    copyto!(rsol.solver.csc.nzval, Ki.nzval)
+    MadNLP.factorize!(rsol.solver)
+
+    nrhs = size(rsol.V, 2)
+    nu = size(K0, 1)
+    N = div(nu, nrhs, RoundDown)
+    for i in 1:N
+        X = view(Bi, :, (i-1)*nrhs+1:i*nrhs)
+        Sv = view(S, :, (i-1)*nrhs+1:i*nrhs)
+        KBi = solve!(rsol, X)            #  KBi = Kᵢ⁻¹ Bᵢ
+        mul!(Sv, Bi', KBi, -1.0, 0.0)    #  S += - Bᵢᵀ Kᵢ⁻¹ Bᵢ
+    end
+    last_batch = nu - N * nrhs
+    if last_batch > 0
+        span = (nu-nrhs+1):nu
+        X = view(Bi, :, span)
+        Sv = view(S, :, span)
+        KBi = solve!(rsol, X)            #  KBi = Kᵢ⁻¹ Bᵢ
+        mul!(Sv, Bi', KBi, -1.0, 0.0)    #  S += - Bᵢᵀ Kᵢ⁻¹ Bᵢ
+    end
+
+    S .+= Symmetric(K0, :L)              #  S = K₀
+end
+
+#=
+    Pardiso
+=#
+
+struct PardisoSolver{T}
+    n::Int
+    csc::SparseMatrixCSC{T,Int32}
+    w::Vector{T}
+    pt::Vector{Int}
+    iparm::Vector{Int32}
+    dparm::Vector{T}
+    perm::Vector{Int32}
+    mtype::Ref{Int32}
+    maxfct::Ref{Int32}
+    msglvl::Ref{Int32}
+    err::Ref{Int32}
+end
+
+function PardisoSolver(
+    csc::SparseMatrixCSC{T, Int32};
+    check_matrix=true,
+) where T
+    n = size(csc, 1)
+    w = zeros(T, n)
+    pt = zeros(Int, 64)
+    iparm = zeros(Int32, 64)
+    dparm = zeros(T, 64)
+    perm = zeros(Int32, n)
+
+    # Set iparams
+    iparm[8] = opt.pardiso_max_inner_refinement_steps
+    iparm[10] = 12 # pivot perturbation
+    iparm[11] = 0 # disable scaling
+    iparm[13] = 1 # matching strategy
+    iparm[21] = 3 # bunch-kaufman pivotin
+    iparm[24] = 1 # parallel factorization
+    iparm[25] = 1 # parallel solv
+
+    # Control params
+    msglvl = Ref{Int32}(0)
+    mtype = Ref{Int32}(-2)
+    err = Ref{Int32}(0)
+    maxfct = Ref{Int32}(1)
+
+    # Direct solver
+    solver = Ref{Int32}(0)
+
+    # Check that matrix parses correctly in Pardiso
+    if check_matrix
+        LibPardiso.pardiso_chkmatrix(mtype, Ref(Int32(n)), csc.nzval, csc.colptr, csc.rowval, err)
+        @assert err[] == 0
+    end
+
+    # Init Pardiso
+    LibPardiso.pardisoinit_d(pt, mtype, solver, iparm, dparm, err)
+    @assert err[] == 0
+
+    M = PardisoSolver{T}(n, csc, w, pt, iparm, dparm, perm, mtype, maxfct, msglvl, err)
+    finalizer(finalize!, M)
+    return M
+end
+
+function factorize!(M::PardisoSolver{T}) where T
+    phase = Ref(Int32(12))
+    nrhs = Ref(Int32(1))
+    LibPardiso.pardiso_d(
+        M.pt, M.maxfct, M.mnum, M.mtype, phase, Ref{Int32}(M.n),
+        M.csc.nzval, M.csc.colptr, M.csc.rowval, M.perm, nrhs,
+        M.iparm, M.msglvl, T[], T[], M.err, M.dparm,
+    )
+    @assert M.err[] == 0
+end
+
+function solve!(M::PardisoSolver{T}, rhs::Vector{T}) where T
+    @assert length(rhs) == M.n
+    phase = Ref(Int32(33))
+    nrhs = Ref(Int32(1))
+    # TODO: check how to pass an unique RHS
+    LibPardiso.pardiso_d(
+        M.pt, M.maxfct, M.mnum, M.mtype, phase, Ref{Int32}(M.n),
+        M.csc.nzval, M.csc.colptr, M.csc.rowval, M.perm, nrhs,
+        M.iparm, M.msglvl, rhs, M.w, M.err, M.dparm,
+    )
+    @assert M.err[] == 0
+end
+
+function finalize!(M::PardisoSolver{T}) where T
+    phase = Ref(Cint(-1))
+    LibPardiso.pardiso_d(
+        M.pt, M.maxfct, M.mnum, M.mtype, phase, Ref{Int32}(M.n),
+        T[], M.csc.colptr, M.csc.rowval, M.perm, Ref(Int32(1)),
+        M.iparm, M.msglvl, T[], T[], M.err, M.dparm,
+    )
+    @assert M.err[] == 0
+end
+
+
+struct PardisoSchurSolver{T} <: AbstractSchurSolver
+    solver::PardisoSolver{T}
+    nu::Int
+    rhs::Vector{T}
+    Sz::Vector{T}
+    Si::Vector{Int32}
+    Sj::Vector{Int32}
+end
+
+function PardisoSchurSolver(
+    Ki::SparseMatrixCSC{T, Int32},
+    Bi::SparseMatrixCSC{T, Int32},
+    K0::SparseMatrixCSC{T, Int32};
+    options...
+) where T
+    nki = size(Ki, 1)
+    n_coupling = size(K0, 1)
+    ntot = nki + n_coupling
+    # Check consistency
+    @assert size(K0, 2) == size(Bi, 2) == n_coupling
+    @assert size(Ki, 2) == size(Bi, 1) == nki
+
+    # Assemble full KKT system
+    K = [Ki spzeros(nki, n_coupling); Bi' K0]
+    solver = PardisoSolver(K)
+
+    rhs = zeros(T, ntot)
+
+    # We assume the Schur-complement is dense.
+    nnzS = div((n_coupling + 1) * n_coupling, 2)
+    Sz = zeros(T, nnzS)
+    Si = zeros(T, n+1)
+    Sj = zeros(T, nnzS)
+
+    return PardisoSchurSolver{T}(solver, n_coupling, rhs, Sz, Si, Sj)
+end
+
+function solve!(rsol::PardisoSchurSolver{T}, x::AbstractVector) where T
+    n = length(x)
+    @assert rsol.n == n + rsol.nu
+    fill!(rsol.rhs, zero(T))
+    copyto!(rsol.rhs, 1, x, 1, n)
+    solve!(rsol.solver, rhs)
+    copyto!(x, 1, rhs, 1, n)
+    return x
+end
+
+function _transfer_values!(K, Ki, Bi, K0)
+    nx = size(Ki, 1)
+    nu = size(K0, 1)
+    @assert size(K, 1) == size(K, 2) == nx + nu
+
+    for j in 1:(nx+nu)
+        for c in K.colptr[j]:K.colptr[j]-1
+            i = K.rowval[c]
+
+            if (i <= nx) && (j <= nx)
+                K.nzval[c] = Ki[i, j]
+            elseif (nx+1 <= i <= nx+nu) && (j <= nx)
+                K.nzval[c] = Bi[j, i - nx]
+            elseif (nx+1 <= i <= nx+nu) && (nx+1 <= j <= nx+nu)
+                K.nzval[c] = K0[i - nx, j - nx]
+            else
+                error("Wrong index")
+            end
+        end
+    end
+end
+
+function schur_solve!(rsol::PardisoSchurSolver{T}, S, Ki, Bi, K0) where T
+    solver = rsol.solver
+
+    # Transfer values
+    _transfer_values!(solver.csc, Ki, Bi, K0)
+
+    # Update factorization
+    solver.iparm[38] = rsol.nu
+    factorize!(rsol)
+
+    # Get Schur-complement
+    LibPardiso.pardiso_get_schur_d(
+        solver.pt, solver.maxfct, solver.mnum, solver.mtype,
+        rsol.Sz, rsol.Si, rsol.Sj,
+    )
+
+    # Unpack Schur-complement into dense matrix
+    fill!(S, zero(T))
+    for i in 1:rsol.nu
+        for c in rsol.Si[i]:rsol.Si[i+1]-1
+            j = rsol.Sj[c]
+            v = rsol.Sz[c]
+            S[i, j] = c
+            S[j, i] = c
+        end
+    end
+end
+

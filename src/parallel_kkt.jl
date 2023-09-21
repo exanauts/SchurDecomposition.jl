@@ -105,8 +105,8 @@ function ParallelKKTSystem{T, VT, MT}(
     _w5 = zeros(m)
     _w6 = zeros(n+ns)
 
-    # rsol = Ma57SchurSolver(Ki, Bi, K0; linear_solver_options...)
-    rsol = PardisoSchurSolver(Ki, Bi, K0; linear_solver_options...)
+    rsol = Ma57SchurSolver(Ki, Bi, K0; linear_solver_options...)
+    # rsol = PardisoSchurSolver(Ki, Bi, K0; linear_solver_options...)
 
     etc = Dict{Symbol, Any}()
     etc[:reduction] = 0.0

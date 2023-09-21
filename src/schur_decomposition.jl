@@ -29,6 +29,7 @@ struct SchurKKTSystem{T, VI, VT, MT} <: MadNLP.AbstractReducedKKTSystem{T, VT, M
     _w4::VT
     _w5::VT
     comm::Union{MPI.Comm, Nothing}
+    etc::Dict{Symbol, Any}
 end
 
 function SchurKKTSystem{T, VI, VT, MT}(
@@ -59,8 +60,15 @@ function SchurKKTSystem{T, VI, VT, MT}(
     _w3 = zeros(n+ns)
     _w4 = zeros(n+ns+m)
     _w5 = zeros(n+ns+m)
+
+    # Timers
+    etc = Dict{Symbol, Any}()
+    etc[:reduction] = 0.0
+    etc[:comm] = 0.0
+    etc[:backsolve] = 0.0
+
     return SchurKKTSystem{T, VI, VT, MT}(
-        kkt, id, nblocks, pr_diag, du_diag, _w1, _w2, _w3, _w4, _w5, comm,
+        kkt, id, nblocks, pr_diag, du_diag, _w1, _w2, _w3, _w4, _w5, comm, etc,
     )
 end
 
@@ -116,7 +124,9 @@ function MadNLP.jtprod!(
     copyto!(y_h, shift_s+1, _y, nx+nu+1, ns)
 
     # Sum contributions
+    tic = comm_walltime(kkt.comm)
     comm_sum!(y_h, kkt.comm)
+    kkt.etc[:comm] += comm_walltime(kkt.comm) - tic
 end
 
 MadNLP.compress_jacobian!(kkt::SchurKKTSystem) = MadNLP.compress_jacobian!(kkt.inner)
@@ -125,7 +135,9 @@ MadNLP.compress_hessian!(kkt::SchurKKTSystem) = MadNLP.compress_hessian!(kkt.inn
 function MadNLP.build_kkt!(kkt::SchurKKTSystem)
     MadNLP.build_kkt!(kkt.inner)
     # Assemble Schur complement (reduction) on all processes
+    tic = comm_walltime(kkt.comm)
     comm_sum!(kkt.inner.aug_com, kkt.comm)
+    kkt.etc[:comm] += comm_walltime(kkt.comm) - tic
 end
 
 function MadNLP.solve_refine_wrapper!(
@@ -223,7 +235,9 @@ function MadNLP.solve_refine_wrapper!(
     axpy!(-1.0, khu, tu)                  # tᵤ = tᵤ - Kᵤₓ Gₓ⁻¹ r₄
 
     du .= tu
+    tic = comm_walltime(kkt.comm)
     comm_sum!(du, comm)
+    kkt.etc[:comm] += comm_walltime(kkt.comm) - tic
     ips.cnt.linear_solver_time += @elapsed begin
         MadNLP.solve!(ips.linear_solver, du)
     end
@@ -253,7 +267,9 @@ function MadNLP.solve_refine_wrapper!(
     # Scale coupling's direction by number of processes
     x_h[shift_u+1:shift_u+nu] ./= nblocks
 
+    tic = comm_walltime(kkt.comm)
     comm_sum!(x_h, comm)
+    kkt.etc[:comm] += comm_walltime(kkt.comm) - tic
 
     return solve_status
 end

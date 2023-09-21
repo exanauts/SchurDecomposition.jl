@@ -87,7 +87,7 @@ end
 
 function symmetrize!(A::AbstractMatrix)
     n = size(A, 1)
-    for i in 1:n, j in 1:i
+    @inbounds for i in 1:n, j in 1:i
         val = (A[i, j] + A[j, i]) / 2.0
         A[i, j] = val
         A[j, i] = val

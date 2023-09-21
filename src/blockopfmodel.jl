@@ -227,4 +227,11 @@ function MadNLP.scale_constraints!(
     # comm_sum!(con_scale, opf.comm)
     con_scale .= 0.01 #min.(1.0, max_gradient ./ con_scale)
 end
+function MadNLP.scale_objective(
+    nlp::BlockOPFModel,
+    grad::AbstractVector;
+    max_gradient=1e-8,
+)
+    return 1e-3
+end
 

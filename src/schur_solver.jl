@@ -95,7 +95,7 @@ end
     Pardiso
 =#
 
-struct PardisoSolver{T}
+mutable struct PardisoSolver{T}
     n::Int
     csc::SparseMatrixCSC{T,Int32}
     w::Vector{T}
@@ -104,9 +104,11 @@ struct PardisoSolver{T}
     dparm::Vector{T}
     perm::Vector{Int32}
     mtype::Ref{Int32}
+    mnum::Ref{Int32}
     maxfct::Ref{Int32}
     msglvl::Ref{Int32}
     err::Ref{Int32}
+    cnt::Ref{Int32}
 end
 
 function PardisoSolver(
@@ -121,19 +123,25 @@ function PardisoSolver(
     perm = zeros(Int32, n)
 
     # Set iparams
-    iparm[8] = opt.pardiso_max_inner_refinement_steps
+    iparm[1] = 1
+    iparm[2] = 2  # Metis ordering
+    iparm[3] = 1  # num procs
+    iparm[8] = 8  # number of IR steps
     iparm[10] = 12 # pivot perturbation
     iparm[11] = 0 # disable scaling
-    iparm[13] = 1 # matching strategy
+    iparm[13] = 2 # matching strategy
     iparm[21] = 3 # bunch-kaufman pivotin
-    iparm[24] = 1 # parallel factorization
-    iparm[25] = 1 # parallel solv
+    iparm[24] = 0 # parallel factorization
+    iparm[25] = 0 # parallel solv
+    iparm[29] = 0 # parallel solv
+    iparm[33] = 1 # compute determinant
 
     # Control params
     msglvl = Ref{Int32}(0)
     mtype = Ref{Int32}(-2)
     err = Ref{Int32}(0)
     maxfct = Ref{Int32}(1)
+    mnum = Ref{Int32}(1)
 
     # Direct solver
     solver = Ref{Int32}(0)
@@ -148,13 +156,25 @@ function PardisoSolver(
     LibPardiso.pardisoinit_d(pt, mtype, solver, iparm, dparm, err)
     @assert err[] == 0
 
-    M = PardisoSolver{T}(n, csc, w, pt, iparm, dparm, perm, mtype, maxfct, msglvl, err)
+    phase = Ref(Int32(12))
+    nrhs = Ref(Int32(1))
+    LibPardiso.pardiso_d(
+        pt, maxfct, mnum, mtype, phase, Ref{Int32}(n),
+        csc.nzval, csc.colptr, csc.rowval, perm, nrhs,
+        iparm, msglvl, T[], T[], err, dparm,
+    )
+    @assert err[] == 0
+    M = PardisoSolver{T}(n, csc, w, pt, iparm, dparm, perm, mtype, mnum, maxfct, msglvl, err, Ref(Int32(0)))
     finalizer(finalize!, M)
     return M
 end
 
 function factorize!(M::PardisoSolver{T}) where T
-    phase = Ref(Int32(12))
+    if M.cnt[] == 0 # Recompute symbolic factorization at first iteration.
+        phase = Ref(Int32(12))
+    else
+        phase = Ref(Int32(22))
+    end
     nrhs = Ref(Int32(1))
     LibPardiso.pardiso_d(
         M.pt, M.maxfct, M.mnum, M.mtype, phase, Ref{Int32}(M.n),
@@ -162,13 +182,15 @@ function factorize!(M::PardisoSolver{T}) where T
         M.iparm, M.msglvl, T[], T[], M.err, M.dparm,
     )
     @assert M.err[] == 0
+    M.cnt[] += 1
+    return M
 end
 
 function solve!(M::PardisoSolver{T}, rhs::Vector{T}) where T
     @assert length(rhs) == M.n
     phase = Ref(Int32(33))
     nrhs = Ref(Int32(1))
-    # TODO: check how to pass an unique RHS
+    M.iparm[6] = 1 # Unique RHS
     LibPardiso.pardiso_d(
         M.pt, M.maxfct, M.mnum, M.mtype, phase, Ref{Int32}(M.n),
         M.csc.nzval, M.csc.colptr, M.csc.rowval, M.perm, nrhs,
@@ -197,6 +219,59 @@ struct PardisoSchurSolver{T} <: AbstractSchurSolver
     Sj::Vector{Int32}
 end
 
+function _get_augmented_system(Ki, Bi, K0)
+    nx, nu = size(Ki, 1), size(K0, 1)
+    nnzK = nnz(Ki) + nnz(Bi) + nnz(K0)
+
+    iK = zeros(Int32, nnzK)
+    jK = zeros(Int32, nnzK)
+    zK = zeros(Float64, nnzK)
+
+    cnt = 1
+    # Scan Ki
+    for j in 1:nx
+        for c in Ki.colptr[j]:Ki.colptr[j+1]-1
+            i = Ki.rowval[c]
+            v = Ki.nzval[c]
+            iK[cnt] = i
+            jK[cnt] = j
+            # Add small elements on the diagonal for Pardiso
+            zK[cnt] = if (i == j) && (v == 0.0)
+                1e-8
+            else
+                v
+            end
+            cnt += 1
+        end
+    end
+    # Scan Bi
+    for j in 1:nu
+        for c in Bi.colptr[j]:Bi.colptr[j+1]-1
+            iK[cnt] = j + nx
+            jK[cnt] = Bi.rowval[c]
+            zK[cnt] = Bi.nzval[c]
+            cnt += 1
+        end
+    end
+    # Scan K0
+    for j in 1:nu
+        for c in K0.colptr[j]:K0.colptr[j+1]-1
+            i = K0.rowval[c]
+            v = K0.nzval[c]
+            iK[cnt] = i + nx
+            jK[cnt] = j + nx
+            # Add small elements on the diagonal for Pardiso
+            zK[cnt] = if (i == j) && (v == 0.0)
+                1e-8
+            else
+                v
+            end
+            cnt += 1
+        end
+    end
+    return sparse(iK, jK, zK, nx+nu, nx+nu)
+end
+
 function PardisoSchurSolver(
     Ki::SparseMatrixCSC{T, Int32},
     Bi::SparseMatrixCSC{T, Int32},
@@ -211,27 +286,27 @@ function PardisoSchurSolver(
     @assert size(Ki, 2) == size(Bi, 1) == nki
 
     # Assemble full KKT system
-    K = [Ki spzeros(nki, n_coupling); Bi' K0]
+    K = _get_augmented_system(Ki, Bi, K0)
     solver = PardisoSolver(K)
 
     rhs = zeros(T, ntot)
 
     # We assume the Schur-complement is dense.
     nnzS = div((n_coupling + 1) * n_coupling, 2)
+    Si = zeros(Cint, n_coupling+1)
+    Sj = zeros(Cint, nnzS)
     Sz = zeros(T, nnzS)
-    Si = zeros(T, n+1)
-    Sj = zeros(T, nnzS)
 
     return PardisoSchurSolver{T}(solver, n_coupling, rhs, Sz, Si, Sj)
 end
 
 function solve!(rsol::PardisoSchurSolver{T}, x::AbstractVector) where T
     n = length(x)
-    @assert rsol.n == n + rsol.nu
+    @assert rsol.solver.n == n + rsol.nu
     fill!(rsol.rhs, zero(T))
     copyto!(rsol.rhs, 1, x, 1, n)
-    solve!(rsol.solver, rhs)
-    copyto!(x, 1, rhs, 1, n)
+    solve!(rsol.solver, rsol.rhs)
+    copyto!(x, 1, rsol.rhs, 1, n)
     return x
 end
 
@@ -241,9 +316,8 @@ function _transfer_values!(K, Ki, Bi, K0)
     @assert size(K, 1) == size(K, 2) == nx + nu
 
     for j in 1:(nx+nu)
-        for c in K.colptr[j]:K.colptr[j]-1
+        for c in K.colptr[j]:K.colptr[j+1]-1
             i = K.rowval[c]
-
             if (i <= nx) && (j <= nx)
                 K.nzval[c] = Ki[i, j]
             elseif (nx+1 <= i <= nx+nu) && (j <= nx)
@@ -265,7 +339,7 @@ function schur_solve!(rsol::PardisoSchurSolver{T}, S, Ki, Bi, K0) where T
 
     # Update factorization
     solver.iparm[38] = rsol.nu
-    factorize!(rsol)
+    factorize!(solver)
 
     # Get Schur-complement
     LibPardiso.pardiso_get_schur_d(
@@ -273,14 +347,16 @@ function schur_solve!(rsol::PardisoSchurSolver{T}, S, Ki, Bi, K0) where T
         rsol.Sz, rsol.Si, rsol.Sj,
     )
 
-    # Unpack Schur-complement into dense matrix
+    # Unpack Schur-complement from CSR to dense matrix
     fill!(S, zero(T))
     for i in 1:rsol.nu
         for c in rsol.Si[i]:rsol.Si[i+1]-1
             j = rsol.Sj[c]
             v = rsol.Sz[c]
-            S[i, j] = c
-            S[j, i] = c
+            S[i, j] += v
+            if i != j
+                S[j, i] += v
+            end
         end
     end
 end

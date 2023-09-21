@@ -2,8 +2,8 @@ module SchurDecomposition
 
 import MPI
 
-import LinearAlgebra: mul!, ldiv!, axpy!, norm, Symmetric
-import SparseArrays: SparseMatrixCSC, sparse
+import LinearAlgebra: mul!, ldiv!, axpy!, norm, Symmetric, I
+import SparseArrays: SparseMatrixCSC, sparse, spzeros, nnz, dropzeros!
 import MadNLP
 import MadNLPHSL
 import NLPModels
@@ -14,6 +14,9 @@ import CUDA
 import KernelAbstractions as KA
 
 const MPI_ROOT = 0
+
+# Load library
+include(joinpath(@__DIR__, "..", "lib", "libpardiso.jl"))
 
 include("utils.jl")
 include("communication.jl")

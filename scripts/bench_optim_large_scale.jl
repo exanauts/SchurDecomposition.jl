@@ -1,3 +1,7 @@
+#=
+    Script to generate results for Figure 8.
+=#
+
 include("common.jl")
 
 function bench_optim(model, nscen; ntrials=3)

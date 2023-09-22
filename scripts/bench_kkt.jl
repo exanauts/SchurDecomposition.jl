@@ -1,3 +1,7 @@
+#=
+    Script to generate block-KKT results for Figure 5.
+=#
+
 include("common.jl")
 
 function bench_kkt(model, nscen; ntrials=10)

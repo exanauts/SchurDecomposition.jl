@@ -9,14 +9,13 @@ using MPI
 using NLPModels
 using Random
 using SchurDecomposition
-using ArgosCUDA
+# using ArgosCUDA
 using MadNLPGPU
-using CUDAKernels
 
 #=
     PARAMETERS
 =#
-const DATA = joinpath(artifact"ExaData", "ExaData")
+const DATA = "/home/fpacaud/dev/matpower/data/" #joinpath(artifact"ExaData", "ExaData")
 const DEMANDS = joinpath(artifact"ExaData", "ExaData", "mp_demand")
 RESULTS_DIR = "results"
 SAVE_RESULTS = true
@@ -24,7 +23,7 @@ SAVE_RESULTS = true
 #=
     DEVICE
 =#
-dev = :cuda
+dev = :cpu
 if dev == :cpu
     DEVICE = CPU()
     LAPACK_SOLVER = LapackCPUSolver
@@ -32,7 +31,6 @@ elseif dev == :cuda
     DEVICE = CUDADevice()
     LAPACK_SOLVER = LapackGPUSolver
 end
-
 
 #=
     MPI config
@@ -48,7 +46,7 @@ is_master = (MPI.Comm_rank(comm) == root)
 #=
     CUDA config
 =#
-if CUDA.has_cuda()
+if false #CUDA.has_cuda()
     CUDA.device!(id % 2)
     CUDA.allowscalar(false)
 end
@@ -99,7 +97,6 @@ function instantiate_model!(blk::SchurDecomposition.BlockOPFModel)
 end
 
 function build_solver(blk::SchurDecomposition.BlockOPFModel; max_iter=250)
-    nlp = Argos.backend(blk.model)
     madnlp_options = Dict{Symbol, Any}(
         :dual_initialized=>true,
         :lapack_algorithm=>MadNLP.CHOLESKY,

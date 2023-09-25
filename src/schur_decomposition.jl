@@ -235,9 +235,9 @@ function MadNLP.solve_refine_wrapper!(
     axpy!(-1.0, khu, tu)                  # tᵤ = tᵤ - Kᵤₓ Gₓ⁻¹ r₄
 
     du .= tu
-    tic = comm_walltime(kkt.comm)
+    tic = comm_walltime(comm)
     comm_sum!(du, comm)
-    kkt.etc[:comm] += comm_walltime(kkt.comm) - tic
+    solver.kkt.etc[:comm] += comm_walltime(comm) - tic
     ips.cnt.linear_solver_time += @elapsed begin
         MadNLP.solve!(ips.linear_solver, du)
     end
@@ -267,9 +267,9 @@ function MadNLP.solve_refine_wrapper!(
     # Scale coupling's direction by number of processes
     x_h[shift_u+1:shift_u+nu] ./= nblocks
 
-    tic = comm_walltime(kkt.comm)
+    tic = comm_walltime(comm)
     comm_sum!(x_h, comm)
-    kkt.etc[:comm] += comm_walltime(kkt.comm) - tic
+    solver.kkt.etc[:comm] += comm_walltime(comm) - tic
 
     return solve_status
 end

@@ -12,9 +12,6 @@ function bench_optim(model, nscen; ntrials=3)
     n_it = 0
     obj = 0
 
-    # Reset timers
-    solver.kkt.etc[:comm] = 0.0
-    solver.kkt.etc[:reduction] = 0.0
     # Warm-up
     solver = build_solver(blk; max_iter=1)
     MadNLP.solve!(solver)

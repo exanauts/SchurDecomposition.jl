@@ -141,19 +141,19 @@ function MadNLP.build_kkt!(kkt::SchurKKTSystem)
 end
 
 function MadNLP.solve_refine_wrapper!(
-    ips::MadNLP.MadNLPSolver{T, <:SchurKKTSystem{T,VI,VT,MT}},
+    solver::MadNLP.MadNLPSolver{T, <:SchurKKTSystem{T,VI,VT,MT}},
     x_r::MadNLP.AbstractKKTVector, b_r::MadNLP.AbstractKKTVector,
 ) where {T, VI, VT, MT}
-    comm = ips.kkt.comm
-    kkt = ips.kkt.inner
+    comm = solver.kkt.comm
+    kkt = solver.kkt.inner
     # MPI
-    id = ips.kkt.id
-    nblocks = ips.kkt.nblocks
+    id = solver.kkt.id
+    nblocks = solver.kkt.nblocks
     # Problem's dimension
-    m = div(ips.m, nblocks)  # constraints
+    m = div(solver.m, nblocks)  # constraints
     nx, nu = kkt.nx, kkt.nu # state and control
     ns = length(kkt.ind_ineq)
-    n = nx + nu + ns # local number of variables, replace ips.n
+    n = nx + nu + ns # local number of variables, replace solver.n
 
     x_h = MadNLP.full(x_r)
     b_h = MadNLP.full(b_r)
@@ -163,8 +163,8 @@ function MadNLP.solve_refine_wrapper!(
     shift_s = nblocks * nx + nu + id * ns
     shift_y = nblocks * (nx+ns) + nu + id * m
 
-    _x = ips.kkt._w4
-    _b = ips.kkt._w5
+    _x = solver.kkt._w4
+    _b = solver.kkt._w5
 
     copyto!(_b,          1, b_h, shift_x + 1, nx)
     copyto!(_b,       nx+1, b_h, shift_u + 1, nu)
@@ -175,7 +175,7 @@ function MadNLP.solve_refine_wrapper!(
     x = Argos._load_buffer(kkt, _x, :kkt_x)::VT
     b = Argos._load_buffer(kkt, _b, :kkt_b)::VT
 
-    MadNLP.fixed_variable_treatment_vec!(b, ips.ind_fixed)
+    MadNLP.fixed_variable_treatment_vec!(b, solver.ind_fixed)
 
     # Buffers
     jv = kkt._wxu1
@@ -238,8 +238,8 @@ function MadNLP.solve_refine_wrapper!(
     tic = comm_walltime(comm)
     comm_sum!(du, comm)
     solver.kkt.etc[:comm] += comm_walltime(comm) - tic
-    ips.cnt.linear_solver_time += @elapsed begin
-        MadNLP.solve!(ips.linear_solver, du)
+    solver.cnt.linear_solver_time += @elapsed begin
+        MadNLP.solve!(solver.linear_solver, du)
     end
     solve_status = true
 
@@ -256,7 +256,7 @@ function MadNLP.solve_refine_wrapper!(
     dy .= Λ .* (r₅ .- vj .+ α .* r₃ ./ Σₛ)
     ds .= (r₃ .+ α .* dy) ./ Σₛ
 
-    MadNLP.fixed_variable_treatment_vec!(x, ips.ind_fixed)
+    MadNLP.fixed_variable_treatment_vec!(x, solver.ind_fixed)
 
     fill!(x_h, 0)
     copyto!(x_h, shift_x + 1, x,          1, nx)
@@ -299,13 +299,13 @@ function _synchronize_regularization!(kkt::SchurKKTSystem)
     copyto!(kkt.inner.du_diag, 1, kkt.du_diag, shift_c+1, m)
 end
 
-function MadNLP.set_aug_diagonal!(kkt::SchurKKTSystem, ips::MadNLP.MadNLPSolver)
+function MadNLP.set_aug_diagonal!(kkt::SchurKKTSystem, solver::MadNLP.MadNLPSolver)
     # Load data
-    x = MadNLP.full(ips.x)
-    xl = MadNLP.full(ips.xl)
-    xu = MadNLP.full(ips.xu)
-    zl = MadNLP.full(ips.zl)
-    zu = MadNLP.full(ips.zu)
+    x = MadNLP.full(solver.x)
+    xl = MadNLP.full(solver.xl)
+    xu = MadNLP.full(solver.xu)
+    zl = MadNLP.full(solver.zl)
+    zu = MadNLP.full(solver.zu)
     _pr_diag = zeros(length(kkt.pr_diag))
     # Global regularization
     _pr_diag .= zl./(x.-xl) .+ zu./(xu.-x)

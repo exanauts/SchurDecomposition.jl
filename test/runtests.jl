@@ -64,9 +64,23 @@ function test_schur_kkt(casename)
     VI = Vector{Int}
     VT = Vector{T}
     MT = Matrix{T}
-    kkt = SchurDecomposition.SchurKKTSystem{T, VI, VT, MT}(blk)
+    KKT = SchurDecomposition.SchurKKTSystem{T, VI, VT, MT}
 
-    @test isa(kkt, MadNLP.AbstractReducedKKTSystem)
+    # Test inside MadNLP
+    madnlp_options = Dict{Symbol, Any}(
+        :lapack_algorithm=>MadNLP.CHOLESKY,
+        :linear_solver=>LapackCPUSolver,
+    )
+    opt_ipm, opt_linear, logger = MadNLP.load_options(; madnlp_options...)
+    solver = MadNLP.MadNLPSolver{T, KKT}(blk, opt_ipm, opt_linear; logger=logger)
+
+    @test isa(solver.kkt, MadNLP.AbstractReducedKKTSystem)
+
+    # Test MadNLP wrapper
+    MadNLP.build_kkt!(solver.kkt)
+    MadNLP.factorize_wrapper!(solver)
+    MadNLP.solve_refine_wrapper!(solver, solver.d, solver.p)
+
     return
 end
 

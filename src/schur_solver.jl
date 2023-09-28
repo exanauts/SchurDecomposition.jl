@@ -29,19 +29,54 @@ function Ma57SchurSolver(Ki, Bi, K0; max_rhs=16)
 end
 
 function _ma57cd!(
-    job::Cint,n::Cint,fact::Vector{Float64},lfact::Cint,
-    ifact::Vector{Cint},lifact::Cint,nrhs::Cint,rhs::Array{Float64},
-    lrhs::Cint,work::Vector{Float64},lwork::Cint,iwork::Vector{Cint},
-    icntl::Vector{Cint},info::Vector{Cint},
+    job::Cint,
+    n::Cint,
+    fact::Vector{Float64},
+    lfact::Cint,
+    ifact::Vector{Cint},
+    lifact::Cint,
+    nrhs::Cint,
+    rhs::Array{Float64},
+    lrhs::Cint,
+    work::Vector{Float64},
+    lwork::Cint,
+    iwork::Vector{Cint},
+    icntl::Vector{Cint},
+    info::Vector{Cint},
 )
-    ccall(
+    return ccall(
         ("ma57cd_", MadNLPHSL.libhsl),
         Nothing,
-        (Ref{Cint},Ref{Cint},Ptr{Float64},Ref{Cint},
-            Ptr{Cint},Ref{Cint},Ref{Cint},Ptr{Float64},
-            Ref{Cint},Ptr{Float64},Ref{Cint},Ptr{Cint},
-            Ptr{Cint},Ptr{Cint}),
-        job,n,fact,lfact,ifact,lifact,nrhs,rhs,lrhs,work,lwork,iwork,icntl,info,
+        (
+            Ref{Cint},
+            Ref{Cint},
+            Ptr{Float64},
+            Ref{Cint},
+            Ptr{Cint},
+            Ref{Cint},
+            Ref{Cint},
+            Ptr{Float64},
+            Ref{Cint},
+            Ptr{Float64},
+            Ref{Cint},
+            Ptr{Cint},
+            Ptr{Cint},
+            Ptr{Cint},
+        ),
+        job,
+        n,
+        fact,
+        lfact,
+        ifact,
+        lifact,
+        nrhs,
+        rhs,
+        lrhs,
+        work,
+        lwork,
+        iwork,
+        icntl,
+        info,
     )
 end
 
@@ -54,8 +89,20 @@ function solve!(rsol::Ma57SchurSolver, X::AbstractMatrix)
     rsol.V .= X
     # Solve linear system with multiple right-hand-sides
     _ma57cd!(
-        one(Int32),Int32(M.csc.n),M.fact,M.lfact,M.ifact,
-        M.lifact,Int32(nrhs),rsol.V,Int32(n),rsol.lwork,Int32(n*nrhs),M.iwork,M.icntl,M.info,
+        one(Int32),
+        Int32(M.csc.n),
+        M.fact,
+        M.lfact,
+        M.ifact,
+        M.lifact,
+        Int32(nrhs),
+        rsol.V,
+        Int32(n),
+        rsol.lwork,
+        Int32(n * nrhs),
+        M.iwork,
+        M.icntl,
+        M.info,
     )
     M.info[1] < 0 && throw(MadNLP.SolveException())
     return rsol.V
@@ -89,6 +136,7 @@ function schur_solve!(rsol::Ma57SchurSolver, S, Ki, Bi, K0)
     end
 
     S .+= Symmetric(K0, :L)              #  S = K₀
+    return
 end
 
 #=
@@ -111,10 +159,7 @@ mutable struct PardisoSolver{T}
     cnt::Ref{Int32}
 end
 
-function PardisoSolver(
-    csc::SparseMatrixCSC{T, Int32};
-    check_matrix=true,
-) where T
+function PardisoSolver(csc::SparseMatrixCSC{T,Int32}; check_matrix=true) where {T}
     n = size(csc, 1)
     w = zeros(T, n)
     pt = zeros(Int, 64)
@@ -148,7 +193,14 @@ function PardisoSolver(
 
     # Check that matrix parses correctly in Pardiso
     if check_matrix
-        LibPardiso.pardiso_chkmatrix(mtype, Ref(Int32(n)), csc.nzval, csc.colptr, csc.rowval, err)
+        LibPardiso.pardiso_chkmatrix(
+            mtype,
+            Ref(Int32(n)),
+            csc.nzval,
+            csc.colptr,
+            csc.rowval,
+            err,
+        )
         @assert err[] == 0
     end
 
@@ -159,17 +211,45 @@ function PardisoSolver(
     phase = Ref(Int32(12))
     nrhs = Ref(Int32(1))
     LibPardiso.pardiso_d(
-        pt, maxfct, mnum, mtype, phase, Ref{Int32}(n),
-        csc.nzval, csc.colptr, csc.rowval, perm, nrhs,
-        iparm, msglvl, T[], T[], err, dparm,
+        pt,
+        maxfct,
+        mnum,
+        mtype,
+        phase,
+        Ref{Int32}(n),
+        csc.nzval,
+        csc.colptr,
+        csc.rowval,
+        perm,
+        nrhs,
+        iparm,
+        msglvl,
+        T[],
+        T[],
+        err,
+        dparm,
     )
     @assert err[] == 0
-    M = PardisoSolver{T}(n, csc, w, pt, iparm, dparm, perm, mtype, mnum, maxfct, msglvl, err, Ref(Int32(0)))
+    M = PardisoSolver{T}(
+        n,
+        csc,
+        w,
+        pt,
+        iparm,
+        dparm,
+        perm,
+        mtype,
+        mnum,
+        maxfct,
+        msglvl,
+        err,
+        Ref(Int32(0)),
+    )
     finalizer(finalize!, M)
     return M
 end
 
-function factorize!(M::PardisoSolver{T}) where T
+function factorize!(M::PardisoSolver{T}) where {T}
     if M.cnt[] == 0 # Recompute symbolic factorization at first iteration.
         phase = Ref(Int32(12))
     else
@@ -177,38 +257,79 @@ function factorize!(M::PardisoSolver{T}) where T
     end
     nrhs = Ref(Int32(1))
     LibPardiso.pardiso_d(
-        M.pt, M.maxfct, M.mnum, M.mtype, phase, Ref{Int32}(M.n),
-        M.csc.nzval, M.csc.colptr, M.csc.rowval, M.perm, nrhs,
-        M.iparm, M.msglvl, T[], T[], M.err, M.dparm,
+        M.pt,
+        M.maxfct,
+        M.mnum,
+        M.mtype,
+        phase,
+        Ref{Int32}(M.n),
+        M.csc.nzval,
+        M.csc.colptr,
+        M.csc.rowval,
+        M.perm,
+        nrhs,
+        M.iparm,
+        M.msglvl,
+        T[],
+        T[],
+        M.err,
+        M.dparm,
     )
     @assert M.err[] == 0
     M.cnt[] += 1
     return M
 end
 
-function solve!(M::PardisoSolver{T}, rhs::Vector{T}) where T
+function solve!(M::PardisoSolver{T}, rhs::Vector{T}) where {T}
     @assert length(rhs) == M.n
     phase = Ref(Int32(33))
     nrhs = Ref(Int32(1))
     M.iparm[6] = 1 # Unique RHS
     LibPardiso.pardiso_d(
-        M.pt, M.maxfct, M.mnum, M.mtype, phase, Ref{Int32}(M.n),
-        M.csc.nzval, M.csc.colptr, M.csc.rowval, M.perm, nrhs,
-        M.iparm, M.msglvl, rhs, M.w, M.err, M.dparm,
+        M.pt,
+        M.maxfct,
+        M.mnum,
+        M.mtype,
+        phase,
+        Ref{Int32}(M.n),
+        M.csc.nzval,
+        M.csc.colptr,
+        M.csc.rowval,
+        M.perm,
+        nrhs,
+        M.iparm,
+        M.msglvl,
+        rhs,
+        M.w,
+        M.err,
+        M.dparm,
     )
     @assert M.err[] == 0
 end
 
-function finalize!(M::PardisoSolver{T}) where T
+function finalize!(M::PardisoSolver{T}) where {T}
     phase = Ref(Cint(-1))
     LibPardiso.pardiso_d(
-        M.pt, M.maxfct, M.mnum, M.mtype, phase, Ref{Int32}(M.n),
-        T[], M.csc.colptr, M.csc.rowval, M.perm, Ref(Int32(1)),
-        M.iparm, M.msglvl, T[], T[], M.err, M.dparm,
+        M.pt,
+        M.maxfct,
+        M.mnum,
+        M.mtype,
+        phase,
+        Ref{Int32}(M.n),
+        T[],
+        M.csc.colptr,
+        M.csc.rowval,
+        M.perm,
+        Ref(Int32(1)),
+        M.iparm,
+        M.msglvl,
+        T[],
+        T[],
+        M.err,
+        M.dparm,
     )
     @assert M.err[] == 0
 end
-
 
 struct PardisoSchurSolver{T} <: AbstractSchurSolver
     solver::PardisoSolver{T}
@@ -269,15 +390,15 @@ function _get_augmented_system(Ki, Bi, K0)
             cnt += 1
         end
     end
-    return sparse(iK, jK, zK, nx+nu, nx+nu)
+    return sparse(iK, jK, zK, nx + nu, nx + nu)
 end
 
 function PardisoSchurSolver(
-    Ki::SparseMatrixCSC{T, Int32},
-    Bi::SparseMatrixCSC{T, Int32},
-    K0::SparseMatrixCSC{T, Int32};
-    options...
-) where T
+    Ki::SparseMatrixCSC{T,Int32},
+    Bi::SparseMatrixCSC{T,Int32},
+    K0::SparseMatrixCSC{T,Int32};
+    options...,
+) where {T}
     nki = size(Ki, 1)
     n_coupling = size(K0, 1)
     ntot = nki + n_coupling
@@ -293,14 +414,14 @@ function PardisoSchurSolver(
 
     # We assume the Schur-complement is dense.
     nnzS = div((n_coupling + 1) * n_coupling, 2)
-    Si = zeros(Cint, n_coupling+1)
+    Si = zeros(Cint, n_coupling + 1)
     Sj = zeros(Cint, nnzS)
     Sz = zeros(T, nnzS)
 
     return PardisoSchurSolver{T}(solver, n_coupling, rhs, Sz, Si, Sj)
 end
 
-function solve!(rsol::PardisoSchurSolver{T}, x::AbstractVector) where T
+function solve!(rsol::PardisoSchurSolver{T}, x::AbstractVector) where {T}
     n = length(x)
     @assert rsol.solver.n == n + rsol.nu
     fill!(rsol.rhs, zero(T))
@@ -320,10 +441,10 @@ function _transfer_values!(K, Ki, Bi, K0)
             i = K.rowval[c]
             if (i <= nx) && (j <= nx)
                 K.nzval[c] = Ki[i, j]
-            elseif (nx+1 <= i <= nx+nu) && (j <= nx)
-                K.nzval[c] = Bi[j, i - nx]
-            elseif (nx+1 <= i <= nx+nu) && (nx+1 <= j <= nx+nu)
-                K.nzval[c] = K0[i - nx, j - nx]
+            elseif (nx + 1 <= i <= nx + nu) && (j <= nx)
+                K.nzval[c] = Bi[j, i-nx]
+            elseif (nx + 1 <= i <= nx + nu) && (nx + 1 <= j <= nx + nu)
+                K.nzval[c] = K0[i-nx, j-nx]
             else
                 error("Wrong index")
             end
@@ -331,7 +452,7 @@ function _transfer_values!(K, Ki, Bi, K0)
     end
 end
 
-function schur_solve!(rsol::PardisoSchurSolver{T}, S, Ki, Bi, K0) where T
+function schur_solve!(rsol::PardisoSchurSolver{T}, S, Ki, Bi, K0) where {T}
     solver = rsol.solver
 
     # Transfer values
@@ -343,8 +464,13 @@ function schur_solve!(rsol::PardisoSchurSolver{T}, S, Ki, Bi, K0) where T
 
     # Get Schur-complement
     LibPardiso.pardiso_get_schur_d(
-        solver.pt, solver.maxfct, solver.mnum, solver.mtype,
-        rsol.Sz, rsol.Si, rsol.Sj,
+        solver.pt,
+        solver.maxfct,
+        solver.mnum,
+        solver.mtype,
+        rsol.Sz,
+        rsol.Si,
+        rsol.Sj,
     )
 
     # Unpack Schur-complement from CSR to dense matrix
@@ -360,4 +486,3 @@ function schur_solve!(rsol::PardisoSchurSolver{T}, S, Ki, Bi, K0) where T
         end
     end
 end
-

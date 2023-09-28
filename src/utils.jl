@@ -49,14 +49,14 @@ function split_kkt_system(W::SparseMatrixCSC, nx::Int, nu::Int)
                 j_K0[lK0] = j - nx
                 mapK0[lK0] = k
                 lK0 += 1
-            # Wxu
+                # Wxu
             elseif (nx + 1 <= i <= nx + nu) && (j <= nx)
                 # Transpose Wxu directly
                 i_Bi[lBi] = j
                 j_Bi[lBi] = i - nx
                 mapBi[lBi] = k
                 lBi += 1
-            # Gu & Hu
+                # Gu & Hu
             elseif (nx + 1 <= j <= nx + nu)
                 i_Bi[lBi] = i - nu
                 j_Bi[lBi] = j - nx
@@ -93,4 +93,3 @@ function symmetrize!(A::AbstractMatrix)
         A[j, i] = val
     end
 end
-

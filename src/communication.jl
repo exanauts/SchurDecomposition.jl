@@ -15,7 +15,7 @@ To which rank is block `blk` currently assigned to.
 
 """
 function whoswork(blk, comm::MPI.Comm)
-    blk % MPI.Comm_size(comm)
+    return blk % MPI.Comm_size(comm)
 end
 
 function whoswork(blk, comm::Nothing)
@@ -70,7 +70,7 @@ comm_sum!(data::AbstractArray, comm::Nothing) = data
 # Special handling for CUDA device
 function comm_sum!(data::CUDA.CuArray, comm::MPI.Comm)
     CUDA.synchronize() # Ensure we synchronize all streams before Reduce
-    MPI.Allreduce!(data, MPI.SUM, comm)
+    return MPI.Allreduce!(data, MPI.SUM, comm)
 end
 
 comm_rank(comm::MPI.Comm) = MPI.Comm_rank(comm)
@@ -81,4 +81,3 @@ comm_barrier(comm::Nothing) = nothing
 
 comm_walltime(comm::MPI.Comm) = MPI.Wtime()
 comm_walltime(comm::Nothing) = time()
-

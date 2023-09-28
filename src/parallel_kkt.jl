@@ -17,12 +17,13 @@
 
 =#
 
-struct ParallelKKTSystem{T, VT, MT} <: MadNLP.AbstractReducedKKTSystem{T, VT, MT, MadNLP.ExactHessian{T, VT}}
-    inner::MadNLP.SparseKKTSystem{T, VT, SparseMatrixCSC{T, Int32}, MadNLP.ExactHessian{T, VT}}
+struct ParallelKKTSystem{T,VT,MT} <:
+       MadNLP.AbstractReducedKKTSystem{T,VT,MT,MadNLP.ExactHessian{T,VT}}
+    inner::MadNLP.SparseKKTSystem{T,VT,SparseMatrixCSC{T,Int32},MadNLP.ExactHessian{T,VT}}
     S::MT  # Schur-complement
-    Ki::SparseMatrixCSC{T, Int}
-    K0::SparseMatrixCSC{T, Int}
-    Bi::SparseMatrixCSC{T, Int}
+    Ki::SparseMatrixCSC{T,Int}
+    K0::SparseMatrixCSC{T,Int}
+    Bi::SparseMatrixCSC{T,Int}
     n::Int
     m::Int
     n_ineq::Int
@@ -47,23 +48,22 @@ struct ParallelKKTSystem{T, VT, MT} <: MadNLP.AbstractReducedKKTSystem{T, VT, MT
     _w5::VT
     _w6::VT
     rsol::AbstractSchurSolver
-    comm::Union{MPI.Comm, Nothing}
-    etc::Dict{Symbol, Any}
+    comm::Union{MPI.Comm,Nothing}
+    etc::Dict{Symbol,Any}
 end
 
-function ParallelKKTSystem{T, VT, MT}(
+function ParallelKKTSystem{T,VT,MT}(
     blk::BlockOPFModel,
     ind_cons=MadNLP.get_index_constraints(blk);
-    linear_solver_options...
-) where {T, VT, MT}
-
+    linear_solver_options...,
+) where {T,VT,MT}
     id = blk.id
     nblocks = blk.nblocks
     comm = blk.comm
 
     nlp = blk.model
-    SMT = SparseMatrixCSC{T, Int32}
-    kkt = MadNLP.SparseKKTSystem{T, VT, SMT, MadNLP.ExactHessian{T, VT}}(nlp)
+    SMT = SparseMatrixCSC{T,Int32}
+    kkt = MadNLP.SparseKKTSystem{T,VT,SMT,MadNLP.ExactHessian{T,VT}}(nlp)
 
     # Local dimensions
     n = NLPModels.get_nvar(nlp)
@@ -100,23 +100,47 @@ function ParallelKKTSystem{T, VT, MT}(
     _v = zeros(nw)
     _w1 = MadNLP._madnlp_unsafe_wrap(_w, nki)
     _w2 = MadNLP._madnlp_unsafe_wrap(_v, nki)
-    _w3 = MadNLP._madnlp_unsafe_wrap(_w, n_coupling, nki+1)
-    _w4 = MadNLP._madnlp_unsafe_wrap(_v, n_coupling, nki+1)
+    _w3 = MadNLP._madnlp_unsafe_wrap(_w, n_coupling, nki + 1)
+    _w4 = MadNLP._madnlp_unsafe_wrap(_v, n_coupling, nki + 1)
     _w5 = zeros(m)
-    _w6 = zeros(n+ns)
+    _w6 = zeros(n + ns)
 
     rsol = Ma57SchurSolver(Ki, Bi, K0; linear_solver_options...)
     # rsol = PardisoSchurSolver(Ki, Bi, K0; linear_solver_options...)
 
-    etc = Dict{Symbol, Any}()
+    etc = Dict{Symbol,Any}()
     etc[:reduction] = 0.0
     etc[:comm] = 0.0
     etc[:backsolve] = 0.0
 
-    return ParallelKKTSystem{T, VT, MT}(
-        kkt, S, Ki, K0, Bi, n, m, ns, n_coupling, mapKi, mapK0, mapBi,
-        id, nblocks, pr_diag, du_diag,
-        _w, _v, _w1, _w2, _w3, _w4, _w5, _w6, rsol, comm, etc,
+    return ParallelKKTSystem{T,VT,MT}(
+        kkt,
+        S,
+        Ki,
+        K0,
+        Bi,
+        n,
+        m,
+        ns,
+        n_coupling,
+        mapKi,
+        mapK0,
+        mapBi,
+        id,
+        nblocks,
+        pr_diag,
+        du_diag,
+        _w,
+        _v,
+        _w1,
+        _w2,
+        _w3,
+        _w4,
+        _w5,
+        _w6,
+        rsol,
+        comm,
+        etc,
     )
 end
 
@@ -132,7 +156,10 @@ MadNLP.get_kkt(kkt::ParallelKKTSystem) = kkt.S
 MadNLP.initialize!(kkt::ParallelKKTSystem) = MadNLP.initialize!(kkt.inner)
 MadNLP.get_raw_jacobian(kkt::ParallelKKTSystem) = MadNLP.get_raw_jacobian(kkt.inner)
 
-function MadNLP.set_jacobian_scaling!(kkt::ParallelKKTSystem{T,VT,MT}, constraint_scaling::AbstractVector) where {T,VT,MT}
+function MadNLP.set_jacobian_scaling!(
+    kkt::ParallelKKTSystem{T,VT,MT},
+    constraint_scaling::AbstractVector,
+) where {T,VT,MT}
     m = kkt.m
     shift_c = kkt.id * m
     _c = view(constraint_scaling, shift_c+1:shift_c+m)
@@ -161,9 +188,9 @@ function _mul_expanded!(y::AbstractVector, kkt::ParallelKKTSystem, x::AbstractVe
     fill!(y, 0.0)
 
     # Copy values to local arrays.
-    copyto!(_x,       1, x, shift_x + 1, nx)
-    copyto!(_x,    nx+1, x, shift_s + 1, ns)
-    copyto!(_x, nx+ns+1, x, shift_y + 1, m)
+    copyto!(_x, 1, x, shift_x + 1, nx)
+    copyto!(_x, nx + 1, x, shift_s + 1, ns)
+    copyto!(_x, nx + ns + 1, x, shift_y + 1, m)
     copyto!(_xu, 1, x, shift_u + 1, nu)
 
     # Multiplication with local KKT system.
@@ -174,10 +201,10 @@ function _mul_expanded!(y::AbstractVector, kkt::ParallelKKTSystem, x::AbstractVe
     mul!(_yu, kkt.Bi', _x, 1.0, 1.0)
 
     # Copy values back to global array.
-    copyto!(y, shift_x + 1, _y,       1, nx)
-    copyto!(y, shift_s + 1, _y,    nx+1, ns)
-    copyto!(y, shift_y + 1, _y, ns+nx+1, m )
-    copyto!(y, shift_u + 1, _yu, 1, nu )
+    copyto!(y, shift_x + 1, _y, 1, nx)
+    copyto!(y, shift_s + 1, _y, nx + 1, ns)
+    copyto!(y, shift_y + 1, _y, ns + nx + 1, m)
+    copyto!(y, shift_u + 1, _yu, 1, nu)
 
     tic = comm_walltime(kkt.comm)
     comm_sum!(y, kkt.comm)
@@ -193,15 +220,19 @@ function mul!(y::AbstractVector, kkt::ParallelKKTSystem, x::AbstractVector)
     end
 end
 
-function mul!(y::MadNLP.AbstractKKTVector, kkt::ParallelKKTSystem, x::MadNLP.AbstractKKTVector)
-    mul!(MadNLP.primal_dual(y), kkt, MadNLP.primal_dual(x))
+function mul!(
+    y::MadNLP.AbstractKKTVector,
+    kkt::ParallelKKTSystem,
+    x::MadNLP.AbstractKKTVector,
+)
+    return mul!(MadNLP.primal_dual(y), kkt, MadNLP.primal_dual(x))
 end
 
 function MadNLP.jtprod!(
     y_h::AbstractVector,
-    kkt::ParallelKKTSystem{T, VT, MT},
+    kkt::ParallelKKTSystem{T,VT,MT},
     x_h::AbstractVector,
-) where {T, VT, MT}
+) where {T,VT,MT}
     fill!(y_h, 0.0)
     nu = kkt.n_coupling
     nx = kkt.n - nu
@@ -217,14 +248,14 @@ function MadNLP.jtprod!(
     _y = kkt._w6
 
     # Load local variable
-    copyto!(_x, 1, x_h, shift_c+1, m)
+    copyto!(_x, 1, x_h, shift_c + 1, m)
 
     MadNLP.jtprod!(_y, kkt.inner, _x)
 
     # Unpack result
-    copyto!(y_h, shift_x+1, _y, 1, nx)
-    copyto!(y_h, shift_u+1, _y, nx+1, nu)
-    copyto!(y_h, shift_s+1, _y, nx+nu+1, ns)
+    copyto!(y_h, shift_x + 1, _y, 1, nx)
+    copyto!(y_h, shift_u + 1, _y, nx + 1, nu)
+    copyto!(y_h, shift_s + 1, _y, nx + nu + 1, ns)
 
     # Sum contributions
     tic = comm_walltime(kkt.comm)
@@ -237,7 +268,7 @@ MadNLP.compress_jacobian!(kkt::ParallelKKTSystem) = MadNLP.compress_jacobian!(kk
 MadNLP.compress_hessian!(kkt::ParallelKKTSystem) = MadNLP.compress_hessian!(kkt.inner)
 
 function assemble!(kkt::ParallelKKTSystem)
-    schur_solve!(kkt.rsol, kkt.S, kkt.Ki, kkt.Bi, kkt.K0)
+    return schur_solve!(kkt.rsol, kkt.S, kkt.Ki, kkt.Bi, kkt.K0)
 end
 
 function MadNLP.build_kkt!(kkt::ParallelKKTSystem)
@@ -263,9 +294,7 @@ function MadNLP.build_kkt!(kkt::ParallelKKTSystem)
     return
 end
 
-function backsolve!(
-    x_h::AbstractVector, solver::MadNLP.MadNLPSolver, b_h::AbstractVector,
-)
+function backsolve!(x_h::AbstractVector, solver::MadNLP.MadNLPSolver, b_h::AbstractVector)
     kkt = solver.kkt
     comm = kkt.comm
     # MPI
@@ -288,9 +317,9 @@ function backsolve!(
     _bu = kkt._w4
 
     # Initiate RHS
-    copyto!(_b,       1, b_h, shift_x + 1, nx)
-    copyto!(_b,    nx+1, b_h, shift_s + 1, ns)
-    copyto!(_b, nx+ns+1, b_h, shift_y + 1, m)
+    copyto!(_b, 1, b_h, shift_x + 1, nx)
+    copyto!(_b, nx + 1, b_h, shift_s + 1, ns)
+    copyto!(_b, nx + ns + 1, b_h, shift_y + 1, m)
     copyto!(_bu, 1, b_h, shift_u + 1, nu)
 
     # TODO
@@ -321,13 +350,13 @@ function backsolve!(
     end
 
     # TODO
-    # MadNLP.fixed_variable_treatment_vec!(x, ips.ind_fixed)
+    # MadNLP.fixed_variable_treatment_vec!(x, solver.ind_fixed)
 
     fill!(x_h, 0.0)
     # / x
-    copyto!(x_h, shift_x + 1, _x,       1, nx)
-    copyto!(x_h, shift_s + 1, _x,    nx+1, ns)
-    copyto!(x_h, shift_y + 1, _x, nx+ns+1, m )
+    copyto!(x_h, shift_x + 1, _x, 1, nx)
+    copyto!(x_h, shift_s + 1, _x, nx + 1, ns)
+    copyto!(x_h, shift_y + 1, _x, nx + ns + 1, m)
     # / u
     copyto!(x_h, shift_u + 1, _xu, 1, nu)
 
@@ -342,9 +371,10 @@ function backsolve!(
 end
 
 function MadNLP.solve_refine_wrapper!(
-    solver::MadNLP.MadNLPSolver{T, <:ParallelKKTSystem{T,VT,MT}},
-    x_r::MadNLP.AbstractKKTVector, b_r::MadNLP.AbstractKKTVector,
-) where {T, VT, MT}
+    solver::MadNLP.MadNLPSolver{T,<:ParallelKKTSystem{T,VT,MT}},
+    x_r::MadNLP.AbstractKKTVector,
+    b_r::MadNLP.AbstractKKTVector,
+) where {T,VT,MT}
     x = MadNLP.primal_dual(x_r)
     b = MadNLP.primal_dual(b_r)
     res = zeros(length(b))
@@ -375,7 +405,7 @@ function MadNLP.solve_refine_wrapper!(
         mul!(res, solver.kkt, x)            # ϵ = A x
         axpy!(-1, b, res)                   # ϵ = Ax - b
         norm_res = norm(res, Inf)
-        residual_ratio = norm_res / (one(T)+norm_b)
+        residual_ratio = norm_res / (one(T) + norm_b)
     end
     return (residual_ratio < tol)
 end
@@ -394,40 +424,39 @@ function _synchronize_regularization!(kkt::ParallelKKTSystem)
     shift_u = nblocks * nx
     shift_s = nblocks * nx + nu + id * ns
 
-    copyto!(kkt.inner.pr_diag,       1, kkt.pr_diag, shift_x+1, nx)
-    copyto!(kkt.inner.pr_diag,    1+nx, kkt.pr_diag, shift_u+1, nu)
-    copyto!(kkt.inner.pr_diag, 1+nx+nu, kkt.pr_diag, shift_s+1, ns)
+    copyto!(kkt.inner.pr_diag, 1, kkt.pr_diag, shift_x + 1, nx)
+    copyto!(kkt.inner.pr_diag, 1 + nx, kkt.pr_diag, shift_u + 1, nu)
+    copyto!(kkt.inner.pr_diag, 1 + nx + nu, kkt.pr_diag, shift_s + 1, ns)
 
     # We dispatch the regularization evently across the different processes
     kkt.inner.pr_diag[1+nx:nx+nu] ./= kkt.nblocks
 
     shift_c = id * m
-    copyto!(kkt.inner.du_diag, 1, kkt.du_diag, shift_c+1, m)
+    copyto!(kkt.inner.du_diag, 1, kkt.du_diag, shift_c + 1, m)
     return
 end
 
-function MadNLP.set_aug_diagonal!(kkt::ParallelKKTSystem, ips::MadNLP.MadNLPSolver)
+function MadNLP.set_aug_diagonal!(kkt::ParallelKKTSystem, solver::MadNLP.MadNLPSolver)
     # Load data
-    x = MadNLP.full(ips.x)
-    xl = MadNLP.full(ips.xl)
-    xu = MadNLP.full(ips.xu)
-    zl = MadNLP.full(ips.zl)
-    zu = MadNLP.full(ips.zu)
+    x = MadNLP.full(solver.x)
+    xl = MadNLP.full(solver.xl)
+    xu = MadNLP.full(solver.xu)
+    zl = MadNLP.full(solver.zl)
+    zu = MadNLP.full(solver.zu)
     _pr_diag = zeros(length(kkt.pr_diag))
     # Global regularization
-    _pr_diag .= zl./(x.-xl) .+ zu./(xu.-x)
+    _pr_diag .= zl ./ (x .- xl) .+ zu ./ (xu .- x)
     copyto!(kkt.pr_diag, _pr_diag)
     fill!(kkt.du_diag, 0.0)
-    _synchronize_regularization!(kkt)
+    return _synchronize_regularization!(kkt)
 end
 
 function MadNLP.regularize_diagonal!(kkt::ParallelKKTSystem, primal, dual)
     kkt.pr_diag .+= primal
     kkt.du_diag .= .-dual
-    _synchronize_regularization!(kkt)
+    return _synchronize_regularization!(kkt)
 end
 
 function MadNLP.is_inertia_correct(kkt::ParallelKKTSystem, num_pos, num_zero, num_neg)
     return num_pos == kkt.n_coupling
 end
-

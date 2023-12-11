@@ -6,8 +6,7 @@ using Argos
 using SchurDecomposition
 using NLPModels
 
-const DATA = joinpath(artifact"ExaData", "ExaData")
-const DEMANDS = joinpath(artifact"ExaData", "ExaData", "mp_demand")
+include("common.jl")
 
 function memory_size(stack::ExaPF.NetworkStack)
     mem = sizeof(stack.input)
@@ -56,7 +55,7 @@ end
 
 function memory_size(kkt::Argos.BieglerKKTSystem)
     mem = sizeof(kkt.aug_com)
-    println("KKT matrix: ", round(mem / 1024^2))
+    # println("KKT matrix: ", round(mem / 1024^2))
     mem += sizeof(kkt.pr_diag) + sizeof(kkt.du_diag)
     mem += sizeof(kkt.j_V) + sizeof(kkt.h_V)
     mem += sizeof(kkt.mapA) + sizeof(kkt.mapGx) + sizeof(kkt.mapGu)
@@ -64,9 +63,9 @@ function memory_size(kkt::Argos.BieglerKKTSystem)
     mem += sizeof(kkt._wx1) + sizeof(kkt._wx2)
     mem += sizeof(kkt._wj1)
     mem += sizeof(kkt.con_scale) + sizeof(kkt.jacobian_scaling)
-    println("KKT matrix: ", round(mem / 1024^2))
+    # println("KKT matrix: ", round(mem / 1024^2))
     mem += memory_size(kkt.reduction)
-    println("KKT matrix: ", round(mem / 1024^2))
+    # println("KKT matrix: ", round(mem / 1024^2))
     return mem
 end
 
@@ -100,12 +99,12 @@ function build_model(casename, nscen)
     nblk = 1
     id = 0
 
-    pload = readdlm(joinpath(DEMANDS, "$(casename)_onehour_60.Pd")) ./ 100
-    qload = readdlm(joinpath(DEMANDS, "$(casename)_onehour_60.Qd")) ./ 100
+    datafile = joinpath(DATA, "$(casename).m")
+    model = PolarForm(datafile, DEVICE)
+    pload, qload = generate_loads(model, nscen, 0.0)
 
     # Create block model
-    datafile = joinpath(DATA, "$(casename).m")
-    return SchurDecomposition.BlockOPFModel(datafile, pload, qload, id, nscen, nblk)
+    return SchurDecomposition.BlockOPFModel(model, pload, qload, 0, nscen, 2)
 end
 
 function how_much_memory(casename, nscen)
@@ -133,5 +132,26 @@ function how_much_memory_70k(casename, nscen)
     model = Argos.backend(blk.model)
     println("MODEL : ", round(memory_size(model) / 1024^2), "mb")
     println("KKT :   ", round(memory_size(kkt) / 1024^2), "mb")
+end
+
+function bench_memory(casename; nscens=[10, 20, 30, 60, 120, 240])
+    nblk, id = 1, 0
+
+    datafile = joinpath(DATA, "$(casename).m")
+    model = ExaPF.PolarForm(datafile, DEVICE)
+
+    nexp = length(nscens)
+    results = zeros(nexp, 2)
+    for (i, k) in enumerate(nscens)
+        pload, qload = generate_loads(model, k, 0.0)
+        # Create block model
+        blk = SchurDecomposition.BlockOPFModel(model, pload, qload, 0, k, 2)
+        kkt = build_kkt(blk)
+
+        sto = Argos.backend(blk.model)
+        results[i, 1] = memory_size(sto) / 1024^2
+        results[i, 2] = memory_size(kkt) / 1024^2
+    end
+    return results
 end
 

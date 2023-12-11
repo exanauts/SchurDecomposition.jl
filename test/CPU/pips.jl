@@ -61,11 +61,14 @@ madnlp_options = Dict{Symbol, Any}(
 )
 opt_ipm, opt_linear, logger = MadNLP.load_options(; madnlp_options...)
 
-KKT = SchurDecomposition.SchurKKTSystem{Float64, Vector{Int}, Vector{Float64}, Matrix{Float64}}
+KKT = SchurDecomposition.ParallelKKTSystem{Float64, Vector{Float64}, Matrix{Float64}}
 for i in 1:ntrials
     GC.gc(true) # clean memory
     ipp = MadNLP.MadNLPSolver{Float64, KKT}(blk, opt_ipm, opt_linear; logger=logger)
     MadNLP.solve!(ipp)
+    if is_master
+        println(ipp.kkt.etc)
+    end
 end
 
 MPI.Finalize()

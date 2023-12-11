@@ -1,3 +1,7 @@
+#=
+    Script to generate results for Figure 4.
+=#
+
 include("common.jl")
 
 function bench_callbacks(model, nscen; ntrials=10)

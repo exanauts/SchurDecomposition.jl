@@ -7,5 +7,5 @@ nscen = 12
 
 ## Options
 scaling = true
-max_iter = 30
-ntrials = 3
+max_iter = 100
+ntrials = 2

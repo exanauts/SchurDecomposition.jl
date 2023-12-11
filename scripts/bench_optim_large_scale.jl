@@ -1,10 +1,14 @@
+#=
+    Script to generate results for Figure 8.
+=#
+
 include("common.jl")
 
 function bench_optim(model, nscen; ntrials=3)
     blk = load_model(model, nscen, comm)
     instantiate_model!(blk)
 
-    t_total, t_callbacks, t_linear_solver = (0.0, 0.0, 0.0)
+    t_total, t_callbacks, t_linear_solver, t_reduce, t_comm = (0.0, 0.0, 0.0, 0.0, 0.0)
     n_it = 0
     obj = 0
 
@@ -19,6 +23,8 @@ function bench_optim(model, nscen; ntrials=3)
         t_linear_solver += solver.cnt.linear_solver_time
         n_it += solver.cnt.k
         obj += solver.obj_val
+        t_reduce += solver.kkt.etc[:reduction]
+        t_comm += solver.kkt.etc[:comm]
     end
     return (
         iters = n_it / ntrials,
@@ -26,6 +32,8 @@ function bench_optim(model, nscen; ntrials=3)
         total = t_total / ntrials,
         callbacks = t_callbacks / ntrials,
         linear_solver = t_linear_solver / ntrials,
+        reduction = t_reduce / ntrials,
+        comm = t_comm / ntrials,
     )
 end
 
@@ -35,11 +43,11 @@ function run_benchmark_optim(casename; nscens=[10, 20, 30, 60, 120, 240])
     model = ExaPF.PolarForm(datafile, DEVICE)
     nexp = length(nscens)
 
-    results = zeros(nexp, 6)
+    results = zeros(nexp, 8)
     for (i, k) in enumerate(nscens)
         println("    nscens=$(k)")
         r = bench_optim(model, k)
-        results[i, :] .= (k, r.iters, r.obj, r.total, r.callbacks, r.linear_solver)
+        results[i, :] .= (k, r.iters, r.obj, r.total, r.callbacks, r.linear_solver, r.reduction, r.comm)
         refresh_memory()
     end
 

@@ -8,8 +8,8 @@
     - u : coupling variable
 =#
 
-struct BlockOPFModel <: NLPModels.AbstractNLPModel{Float64, Vector{Float64}}
-    meta::NLPModels.NLPModelMeta{Float64, Vector{Float64}}
+struct BlockOPFModel <: NLPModels.AbstractNLPModel{Float64,Vector{Float64}}
+    meta::NLPModels.NLPModelMeta{Float64,Vector{Float64}}
     counters::NLPModels.Counters
     id::Int # warning: id is 0-based!
     nblocks::Int
@@ -22,14 +22,14 @@ struct BlockOPFModel <: NLPModels.AbstractNLPModel{Float64, Vector{Float64}}
     c::Vector{Float64}
     hash_x::Ref{UInt64}
     timers::Argos.NLPTimers
-    comm::Union{Nothing, MPI.Comm}
-    etc::Dict{Symbol, Any}
+    comm::Union{Nothing,MPI.Comm}
+    etc::Dict{Symbol,Any}
 end
 
 function BlockOPFModel(
     model::ExaPF.PolarForm,
-    ploads::Array{Float64, 2},
-    qloads::Array{Float64, 2},
+    ploads::Array{Float64,2},
+    qloads::Array{Float64,2},
     id::Int,
     nscen::Int,
     nblocks::Int;
@@ -66,9 +66,9 @@ function BlockOPFModel(
     gu = NLPModels.get_ucon(model)
 
     xs = zeros(n)
-    x = zeros(nx*nblocks + nu)
+    x = zeros(nx * nblocks + nu)
     g = zeros(nx + nu)
-    etc = Dict{Symbol, Any}()
+    etc = Dict{Symbol,Any}()
 
     ncon = NLPModels.get_ncon(model) * nblocks
     y0 = zeros(ncon)
@@ -76,22 +76,23 @@ function BlockOPFModel(
 
     return BlockOPFModel(
         NLPModels.NLPModelMeta(
-            nx*nblocks+nu,
+            nx * nblocks + nu,
             ncon=ncon,
-            nnzj = NLPModels.get_nnzj(model),
-            nnzh = NLPModels.get_nnzh(model),
-            x0 = x0,
-            y0 = y0,
-            lvar = bxl,
-            uvar = bxu,
-            lcon = repeat(gl, nblocks),
-            ucon = repeat(gu, nblocks),
-            minimize = true
+            nnzj=NLPModels.get_nnzj(model),
+            nnzh=NLPModels.get_nnzh(model),
+            x0=x0,
+            y0=y0,
+            lvar=bxl,
+            uvar=bxu,
+            lcon=repeat(gl, nblocks),
+            ucon=repeat(gu, nblocks),
+            minimize=true,
         ),
         NLPModels.Counters(),
         id,
         nblocks,
-        nx, nu,
+        nx,
+        nu,
         model,
         x,
         xs,
@@ -100,17 +101,17 @@ function BlockOPFModel(
         Ref(UInt64(0)),
         Argos.NLPTimers(),
         comm,
-        Dict{Symbol, Any}(),
+        Dict{Symbol,Any}(),
     )
 end
 function BlockOPFModel(
     casename::String,
-    ploads::Array{Float64, 2},
-    qloads::Array{Float64, 2},
+    ploads::Array{Float64,2},
+    qloads::Array{Float64,2},
     id::Int,
     nscen::Int,
     nblocks::Int;
-    device=CPU(),
+    device=KA.CPU(),
     comm=nothing,
 )
     return BlockOPFModel(
@@ -137,9 +138,9 @@ function _update!(opf::BlockOPFModel, x::AbstractVector)
         copyto!(opf.x, x)
         opf.hash_x[] = hx
         # Copy values internally in opf.xs
-        shift_u = opf.nx*opf.nblocks
+        shift_u = opf.nx * opf.nblocks
         copyto!(opf.xs, 1, opf.x, opf.id * opf.nx + 1, opf.nx)
-        copyto!(opf.xs, opf.nx+1, opf.x, shift_u+1, opf.nu)
+        copyto!(opf.xs, opf.nx + 1, opf.x, shift_u + 1, opf.nu)
     end
 end
 
@@ -161,9 +162,9 @@ function NLPModels.grad!(opf::BlockOPFModel, x::AbstractVector, g::AbstractVecto
         NLPModels.grad!(opf.model, opf.xs, opf.g)
         opf.g ./= opf.nblocks # scale down gradient
         # / State
-        copyto!(g, opf.id*opf.nx+1, opf.g, 1, opf.nx)
+        copyto!(g, opf.id * opf.nx + 1, opf.g, 1, opf.nx)
         # / Coupling
-        copyto!(g, shift_u+1, opf.g, opf.nx+1, opf.nu)
+        copyto!(g, shift_u + 1, opf.g, opf.nx + 1, opf.nu)
     end
     # Accumulate gradient on all subprocesses
     comm_sum!(g, opf.comm)
@@ -196,7 +197,13 @@ function NLPModels.jac_coord!(opf::BlockOPFModel, x::AbstractVector, jac::Abstra
 end
 
 # Hessian: sparse callback
-function NLPModels.hess_coord!(opf::BlockOPFModel, x::AbstractVector, l::AbstractVector, hess::AbstractVector; obj_weight=1.0)
+function NLPModels.hess_coord!(
+    opf::BlockOPFModel,
+    x::AbstractVector,
+    l::AbstractVector,
+    hess::AbstractVector;
+    obj_weight=1.0,
+)
     _update!(opf, x)
     opf.timers.hessian_time += @elapsed begin
         m = NLPModels.get_ncon(opf.model)
@@ -215,16 +222,18 @@ function MadNLP.scale_constraints!(
     jac::MadNLP.SparseMatrixCOO; # Ji
     max_gradient=1e-8,
 )
-    m = size(jac, 1) # number of local constraints
-    shift_c = opf.id * m
-    fill!(con_scale, 0.0)
-    for i in 1:length(jac.I)
-        row = @inbounds jac.I[i]
-        @assert 1 <= row <= m
-        @inbounds con_scale[row+shift_c] = max(con_scale[row+shift_c], abs(jac.V[i]))
-    end
+    # m = size(jac, 1) # number of local constraints
+    # shift_c = opf.id * m
+    # fill!(con_scale, 0.0)
+    # for i in 1:length(jac.I)
+    #     row = @inbounds jac.I[i]
+    #     @assert 1 <= row <= m
+    #     @inbounds con_scale[row+shift_c] = max(con_scale[row+shift_c], abs(jac.V[i]))
+    # end
 
-    comm_sum!(con_scale, opf.comm)
-    con_scale .= min.(1.0, max_gradient ./ con_scale)
+    # comm_sum!(con_scale, opf.comm)
+    return con_scale .= 0.01 #min.(1.0, max_gradient ./ con_scale)
 end
-
+function MadNLP.scale_objective(nlp::BlockOPFModel, grad::AbstractVector; max_gradient=1e-8)
+    return 1e-3
+end

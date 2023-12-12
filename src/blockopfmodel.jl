@@ -187,6 +187,10 @@ function NLPModels.cons!(opf::BlockOPFModel, x::AbstractVector, c::AbstractVecto
 end
 
 # Jacobian: sparse callback
+function NLPModels.jac_structure!(opf::BlockOPFModel, rows::Vector{Int}, cols::Vector{Int})
+    return NLPModels.jac_structure!(opf.model, rows, cols)
+end
+
 function NLPModels.jac_coord!(opf::BlockOPFModel, x::AbstractVector, jac::AbstractVector)
     _update!(opf, x)
     opf.timers.jacobian_time += @elapsed begin
@@ -197,6 +201,10 @@ function NLPModels.jac_coord!(opf::BlockOPFModel, x::AbstractVector, jac::Abstra
 end
 
 # Hessian: sparse callback
+function NLPModels.hess_structure!(opf::BlockOPFModel, rows::Vector{Int}, cols::Vector{Int})
+    return NLPModels.hess_structure!(opf.model, rows, cols)
+end
+
 function NLPModels.hess_coord!(
     opf::BlockOPFModel,
     x::AbstractVector,
@@ -215,25 +223,3 @@ function NLPModels.hess_coord!(
     return
 end
 
-# Special scaling to keep Jacobian local
-function MadNLP.scale_constraints!(
-    opf::BlockOPFModel,
-    con_scale::AbstractVector,
-    jac::MadNLP.SparseMatrixCOO; # Ji
-    max_gradient=1e-8,
-)
-    # m = size(jac, 1) # number of local constraints
-    # shift_c = opf.id * m
-    # fill!(con_scale, 0.0)
-    # for i in 1:length(jac.I)
-    #     row = @inbounds jac.I[i]
-    #     @assert 1 <= row <= m
-    #     @inbounds con_scale[row+shift_c] = max(con_scale[row+shift_c], abs(jac.V[i]))
-    # end
-
-    # comm_sum!(con_scale, opf.comm)
-    return con_scale .= 0.01 #min.(1.0, max_gradient ./ con_scale)
-end
-function MadNLP.scale_objective(nlp::BlockOPFModel, grad::AbstractVector; max_gradient=1e-8)
-    return 1e-3
-end

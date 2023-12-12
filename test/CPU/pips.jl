@@ -51,24 +51,27 @@ NLPModels.jac_coord!(blk, x0, jac)
 linear_solver=LapackCPUSolver
 verbose = is_master ? MadNLP.DEBUG : MadNLP.ERROR
 
-madnlp_options = Dict{Symbol, Any}(
-    :tol=>1e-5,
-    :max_iter=>max_iter,
-    :nlp_scaling=>scaling,
-    :print_level=>verbose,
-    :linear_solver=>linear_solver,
-    :dual_initialized=>true,
-)
-opt_ipm, opt_linear, logger = MadNLP.load_options(; madnlp_options...)
-
 KKT = SchurDecomposition.ParallelKKTSystem{Float64, Vector{Float64}, Matrix{Float64}}
-for i in 1:ntrials
-    GC.gc(true) # clean memory
-    ipp = MadNLP.MadNLPSolver{Float64, KKT}(blk, opt_ipm, opt_linear; logger=logger)
-    MadNLP.solve!(ipp)
-    if is_master
-        println(ipp.kkt.etc)
-    end
-end
+
+solver = MadNLP.MadNLPSolver(
+    blk;
+    kkt_system=KKT,
+    max_iter=max_iter,
+    nlp_scaling=scaling,
+    print_level=verbose,
+    linear_solver=linear_solver,
+    dual_initialized=true,
+    tol=1e-5,
+)
+MadNLP.solve!(solver)
+
+# for i in 1:ntrials
+#     GC.gc(true) # clean memory
+#     ipp = MadNLP.MadNLPSolver{Float64, KKT}(blk, opt_ipm, opt_linear; logger=logger)
+#     MadNLP.solve!(ipp)
+#     if is_master
+#         println(ipp.kkt.etc)
+#     end
+# end
 
 MPI.Finalize()

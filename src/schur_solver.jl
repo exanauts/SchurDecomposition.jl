@@ -28,58 +28,6 @@ function Ma57SchurSolver(Ki, Bi, K0; max_rhs=16)
     return Ma57SchurSolver(solver, V, lwork)
 end
 
-function _ma57cd!(
-    job::Cint,
-    n::Cint,
-    fact::Vector{Float64},
-    lfact::Cint,
-    ifact::Vector{Cint},
-    lifact::Cint,
-    nrhs::Cint,
-    rhs::Array{Float64},
-    lrhs::Cint,
-    work::Vector{Float64},
-    lwork::Cint,
-    iwork::Vector{Cint},
-    icntl::Vector{Cint},
-    info::Vector{Cint},
-)
-    return ccall(
-        ("ma57cd_", MadNLPHSL.libhsl),
-        Nothing,
-        (
-            Ref{Cint},
-            Ref{Cint},
-            Ptr{Float64},
-            Ref{Cint},
-            Ptr{Cint},
-            Ref{Cint},
-            Ref{Cint},
-            Ptr{Float64},
-            Ref{Cint},
-            Ptr{Float64},
-            Ref{Cint},
-            Ptr{Cint},
-            Ptr{Cint},
-            Ptr{Cint},
-        ),
-        job,
-        n,
-        fact,
-        lfact,
-        ifact,
-        lifact,
-        nrhs,
-        rhs,
-        lrhs,
-        work,
-        lwork,
-        iwork,
-        icntl,
-        info,
-    )
-end
-
 function solve!(rsol::Ma57SchurSolver, X::AbstractMatrix)
     M = rsol.solver
     n, m = size(X)
@@ -88,7 +36,7 @@ function solve!(rsol::Ma57SchurSolver, X::AbstractMatrix)
 
     rsol.V .= X
     # Solve linear system with multiple right-hand-sides
-    _ma57cd!(
+    MadNLPHSL.HSL.ma57cd(
         one(Int32),
         Int32(M.csc.n),
         M.fact,

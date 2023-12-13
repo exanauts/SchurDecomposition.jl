@@ -65,12 +65,18 @@ function initialize_kkt!(kkt, cb)
 end
 
 function test_schur_kkt(casename)
-    nblk = 2
-    nscen = 10
+    nblk = 1
+    nscen = 2
     id = 0
 
     pload = readdlm(joinpath(DEMANDS, "$(casename)_onehour_60.Pd")) ./ 100
     qload = readdlm(joinpath(DEMANDS, "$(casename)_onehour_60.Qd")) ./ 100
+
+    # Parameters
+    linear_solver = LapackCPUSolver
+    options = MadNLP.MadNLPOptions(; linear_solver=linear_solver)
+    options_linear_solver = MadNLP.default_options(linear_solver)
+    cnt = MadNLP.MadNLPCounters(; start_time=time())
 
     # Create block model
     datafile = joinpath(DATA, "$(casename).m")
@@ -81,28 +87,69 @@ function test_schur_kkt(casename)
     jac = zeros(NLPModels.get_nnzj(blk))
     NLPModels.jac_coord!(blk, x0, jac)
 
-    # Create KKT
-    linear_solver = LapackCPUSolver
-
     T = Float64
     VI = Vector{Int}
     VT = Vector{T}
     MT = Matrix{T}
-    KKT = SchurDecomposition.SchurKKTSystem{T, VI, VT, MT}
 
-    solver = MadNLP.MadNLPSolver(
-        blk;
-        linear_solver=LapackCPUSolver,
-        lapack_algorithm=MadNLP.CHOLESKY,
-        kkt_system=KKT,
-    )
+    @testset "Local KKT" begin
+        ind_cons = MadNLP.get_index_constraints(
+            blk.model,
+            options.fixed_variable_treatment,
+            options.equality_treatment,
+        )
+        inner_cb = MadNLP.create_callback(
+            MadNLP.SparseCallback,
+            blk.model,
+            options,
+        )
+        # Build local KKT system
+        kkt = MadNLP.create_kkt_system(
+            Argos.BieglerKKTSystem{T,VI,VT,MT}, inner_cb, options, options_linear_solver, cnt, ind_cons,
+        )
+        initialize_kkt!(kkt, inner_cb)
+        MadNLP.factorize!(kkt.linear_solver)
 
-    @test isa(solver.kkt, MadNLP.AbstractReducedKKTSystem)
+        b = MadNLP.UnreducedKKTVector(kkt)
+        x = MadNLP.UnreducedKKTVector(kkt)
+        MadNLP.full(x) .= 1.0
+        MadNLP.solve!(kkt, x)
+        mul!(b, kkt, x)
+        @test MadNLP.full(b) ≈ ones(length(b)) atol=1e-6
+    end
 
-    # Test MadNLP wrapper
-    MadNLP.build_kkt!(solver.kkt)
-    MadNLP.factorize_wrapper!(solver)
-    # MadNLP.solve_refine_wrapper!(solver, solver.d, solver.p)
+    # Create KKT
+    @testset "Global KKT" begin
+        ind_cons = MadNLP.get_index_constraints(
+            blk,
+            options.fixed_variable_treatment,
+            options.equality_treatment,
+        )
+        cb = MadNLP.create_callback(
+            MadNLP.SparseCallback,
+            blk,
+            options,
+        )
+
+        KKT = SchurDecomposition.SchurKKTSystem{T, VI, VT, MT}
+        kkt = MadNLP.create_kkt_system(
+            KKT, cb, options, options_linear_solver, cnt, ind_cons,
+        )
+        initialize_kkt!(kkt, cb)
+        MadNLP.factorize!(kkt.linear_solver)
+
+        b = MadNLP.UnreducedKKTVector(kkt)
+        x = MadNLP.UnreducedKKTVector(kkt)
+        rhs = ones(length(x))
+        MadNLP.full(x) .= rhs
+
+        # KKT is reduced
+        @test size(kkt, 1) == length(MadNLP.primal_dual(b))
+
+        MadNLP.solve!(kkt, x)
+        mul!(b, kkt, x)
+        @test MadNLP.full(b) ≈ rhs atol=1e-6
+    end
 
     return
 end
@@ -229,6 +276,16 @@ function test_parallel_kkt(casename)
         @test pkkt.Ki == Ki_ref
         @test pkkt.Bi == Bi_ref
 
+        # Test expression of Schur-complement
+        S = pkkt.S
+        Kid = Array(pkkt.Ki)
+        # Symmetrize
+        Kid .= (Kid .+ Kid')
+        Kid[diagind(Kid)] ./= 2
+        KBi = Kid \ pkkt.Bi
+        Sref = pkkt.K0 - pkkt.Bi' * KBi
+        @test Sref ≈ S
+
         # Test backsolve
         b = MadNLP.UnreducedKKTVector(pkkt)
         x = MadNLP.UnreducedKKTVector(pkkt)
@@ -237,7 +294,6 @@ function test_parallel_kkt(casename)
 
         @test size(pkkt, 1) == length(MadNLP.primal_dual(b))
 
-        # TODO: segfault
         MadNLP.solve!(pkkt, x)
         mul!(b, pkkt, x)
         @test MadNLP.full(b) ≈ rhs atol=1e-6
@@ -247,7 +303,7 @@ end
 
 @testset "BlockOPFModel" begin
     test_block_opf_model("case9")
-    # test_schur_kkt("case9")
+    test_schur_kkt("case9")
     test_parallel_kkt("case9")
 end
 

@@ -20,6 +20,10 @@
 struct SchurKKTSystem{T,VI,VT,MT,LS} <:
        MadNLP.AbstractReducedKKTSystem{T,VT,MT,MadNLP.ExactHessian{T,VT}}
     inner::Argos.BieglerKKTSystem{T,VI,VT,MT}
+    n::Int
+    m::Int
+    n_ineq::Int
+    n_coupling::Int
     id::Int
     nblocks::Int
     reg::Vector{T}
@@ -29,6 +33,11 @@ struct SchurKKTSystem{T,VI,VT,MT,LS} <:
     u_diag::Vector{T}
     l_lower::Vector{T}
     u_lower::Vector{T}
+    # Info
+    ind_ineq::Vector{Int}
+    ind_lb::Vector{Int}
+    ind_ub::Vector{Int}
+    # Buffers
     _w1::VT
     _w2::VT
     _w3::VT
@@ -61,11 +70,16 @@ function MadNLP.create_kkt_system(
         nlp,
         opt,
     )
+    _ind_cons = MadNLP.get_index_constraints(
+        nlp,
+        opt.fixed_variable_treatment,
+        opt.equality_treatment,
+    )
 
     kkt = MadNLP.create_kkt_system(
         Argos.BieglerKKTSystem{T,VI,VT,MT},
-        inner_cb, # TODO: which NLP ?
-        opt, opt_linear_solver, cnt, ind_cons;
+        inner_cb,
+        opt, opt_linear_solver, cnt, _ind_cons;
         max_batches=max_batches,
     )
     nx = kkt.nx
@@ -87,7 +101,7 @@ function MadNLP.create_kkt_system(
     _w3 = zeros(T, n + ns)
     _w4 = zeros(T, n + ns + m)
     _w5 = zeros(T, n + ns + m)
-    reg = zeros(n + ns)
+    reg = zeros(nblocks * (nx + ns) + nu)
 
     l_diag = zeros(nlb)
     u_diag = zeros(nub)
@@ -104,10 +118,12 @@ function MadNLP.create_kkt_system(
 
     return SchurKKTSystem{T,VI,VT,MT,typeof(linear_solver)}(
         kkt,
+        n, m, ns, nu,
         id,
         nblocks,
         reg, pr_diag, du_diag,
         l_diag, u_diag, l_lower, u_lower,
+        ind_cons.ind_ineq, ind_cons.ind_lb, ind_cons.ind_ub,
         _w1,
         _w2,
         _w3,
@@ -119,8 +135,11 @@ function MadNLP.create_kkt_system(
     )
 end
 
-Base.size(kkt::SchurKKTSystem, n::Int) = size(kkt.inner, n)
-Base.size(kkt::SchurKKTSystem) = size(kkt.inner)
+Base.size(kkt::SchurKKTSystem, n::Int) = length(kkt.pr_diag) + length(kkt.du_diag)
+function Base.size(kkt::SchurKKTSystem)
+    m = length(kkt.pr_diag) + length(kkt.du_diag)
+    return (m, m)
+end
 MadNLP.num_variables(kkt::SchurKKTSystem) = kkt.inner.nu
 MadNLP.get_hessian(kkt::SchurKKTSystem) = MadNLP.get_hessian(kkt.inner)
 MadNLP.get_jacobian(kkt::SchurKKTSystem) = MadNLP.get_jacobian(kkt.inner)
@@ -128,26 +147,55 @@ MadNLP.is_reduced(::SchurKKTSystem) = true
 MadNLP.nnz_jacobian(kkt::SchurKKTSystem) = MadNLP.nnz_jacobian(kkt.inner)
 MadNLP.get_kkt(kkt::SchurKKTSystem) = kkt.inner.aug_com
 
-MadNLP.initialize!(kkt::SchurKKTSystem) = MadNLP.initialize!(kkt.inner)
+function MadNLP.initialize!(kkt::SchurKKTSystem)
+    fill!(kkt.reg, 1.0)
+    fill!(kkt.pr_diag, 1.0)
+    fill!(kkt.du_diag, 0.0)
+    fill!(kkt.l_lower, 0.0)
+    fill!(kkt.u_lower, 0.0)
+    fill!(kkt.l_diag, 1.0)
+    fill!(kkt.u_diag, 1.0)
+    fill!(kkt.inner.pr_diag, 1.0)
+end
 MadNLP.get_raw_jacobian(kkt::SchurKKTSystem) = MadNLP.get_raw_jacobian(kkt.inner)
 
 # TODO: mul expanded
-function MadNLP.mul!(
+function mul!(
     y::MadNLP.AbstractKKTVector,
     kkt::SchurKKTSystem,
     x::MadNLP.AbstractKKTVector,
     alpha,
     beta,
 )
-    nu = kkt.inner.nu
+    m = kkt.m
+    nu = kkt.n_coupling
     nx = kkt.inner.nx
+    ns = kkt.n_ineq
+
+    _y = kkt._w4
+    _x = kkt._w5
 
     shift_x = kkt.id * nx
     shift_u = kkt.nblocks * nx
     shift_s = kkt.nblocks * nx + nu + kkt.id * ns
     shift_y = kkt.nblocks * (nx + ns) + nu + kkt.id * m
 
-    mul!(_y, kkt.inner, _x, alpha, beta)
+    copyto!(_x, 1, MadNLP.full(x), shift_x + 1, nx)
+    copyto!(_x, 1 + nx, MadNLP.full(x), shift_u + 1, nu)
+    copyto!(_x, nx + nu + 1, MadNLP.full(x), shift_s + 1, ns)
+    copyto!(_x, nx + nu + ns + 1, MadNLP.full(x), shift_y + 1, m)
+
+    copyto!(_y, 1, MadNLP.full(y), shift_x + 1, nx)
+    copyto!(_y, 1 + nx, MadNLP.full(y), shift_u + 1, nu)
+    copyto!(_y, nx + nu + 1, MadNLP.full(y), shift_s + 1, ns)
+    copyto!(_y, nx + nu + ns + 1, MadNLP.full(y), shift_y + 1, m)
+
+    Argos._mul_expanded!(_y, kkt.inner, _x, alpha, beta)
+
+    copyto!(MadNLP.full(y), shift_x + 1, _y, 1, nx)
+    copyto!(MadNLP.full(y), shift_u + 1, _y, nx + 1, nu)
+    copyto!(MadNLP.full(y), shift_s + 1, _y, nx + nu + 1, ns)
+    copyto!(MadNLP.full(y), shift_y + 1, _y, nx + nu + ns + 1, m)
 
     MadNLP._kktmul!(y, x, kkt.reg, kkt.du_diag, kkt.l_lower, kkt.u_lower, kkt.l_diag, kkt.u_diag, alpha, beta)
     return y
@@ -210,11 +258,11 @@ function MadNLP.solve!(
     nblocks = kkt.nblocks
     comm = kkt.comm
 
-    inner_kkt = solver.kkt.inner
+    inner_kkt = kkt.inner
     # Problem's dimension
-    m = div(solver.m, nblocks)  # constraints
+    m = kkt.m  # constraints
     nx, nu = inner_kkt.nx, inner_kkt.nu # state and control
-    ns = length(kkt.ind_ineq)
+    ns = kkt.n_ineq
     n = nx + nu + ns # local number of variables, replace solver.n
 
     x_full = MadNLP.full(w)
@@ -269,7 +317,7 @@ function MadNLP.solve!(
     du ./= nblocks
     # Reduction (1) --- Condensed
     vj .= (Σₛ .* dy .+ ds)                # v = (Σₛ r₅ + α r₃)
-    mul!(jv, kkt.A', vj, one(T), zero(T)) # jᵥ = Aᵀ v
+    mul!(jv, inner_kkt.A', vj, one(T), zero(T)) # jᵥ = Aᵀ v
     jv .+= dxu                            # r₁₂ - Aᵀv
     # Reduction (2) --- Biegler
     sx1 .= dλ                             # r₄
@@ -286,7 +334,7 @@ function MadNLP.solve!(
     du .= tu
     tic = comm_walltime(comm)
     comm_sum!(du, comm)
-    solver.kkt.etc[:comm] += comm_walltime(comm) - tic
+    kkt.etc[:comm] += comm_walltime(comm) - tic
 
     MadNLP.solve!(kkt.linear_solver, du)
 
@@ -298,7 +346,6 @@ function MadNLP.solve!(
     mul!(kh, K, dxu)                      # Kₓₓ dₓ + Kₓᵤ dᵤ
     axpy!(-one(T), khx, dλ)               # tₓ - Kₓₓ dₓ - Kₓᵤ dᵤ
 
-    # TODO: SEGFAULT
     ldiv!(Gxi', dλ)                       # dₗ = Gₓ⁻ᵀ(tₓ - Kₓₓ dₓ + Kₓᵤ dᵤ)
 
     # (2) Extract Condensed
@@ -307,18 +354,17 @@ function MadNLP.solve!(
     ds .= (vj .- dy)
     dy .= Σₛ .* ds .- vs
 
-    fill!(x_full, zero(T))
-    copyto!(x_h, shift_x + 1, x,                1, nx)
-    copyto!(x_h, shift_u + 1, x,           nx + 1, nu)
-    copyto!(x_h, shift_s + 1, x,      nx + nu + 1, ns)
-    copyto!(x_h, shift_y + 1, x, nx + nu + ns + 1, m)
+    copyto!(x_full, shift_x + 1, x,                1, nx)
+    copyto!(x_full, shift_u + 1, x,           nx + 1, nu)
+    copyto!(x_full, shift_s + 1, x,      nx + nu + 1, ns)
+    copyto!(x_full, shift_y + 1, x, nx + nu + ns + 1, m)
 
     # Scale coupling's direction by number of processes
     x_full[shift_u+1:shift_u+nu] ./= nblocks
 
     tic = comm_walltime(comm)
-    comm_sum!(x_h, comm)
-    solver.kkt.etc[:comm] += comm_walltime(comm) - tic
+    comm_sum!(x_full, comm)
+    kkt.etc[:comm] += comm_walltime(comm) - tic
 
     MadNLP.finish_aug_solve!(kkt, w)
     return w
@@ -350,7 +396,7 @@ function _synchronize_regularization!(kkt::SchurKKTSystem)
     return
 end
 
-function MadNLP.set_aug_diagonal!(kkt::SchurKKTSystem, solver::MadNLP.MadNLPSolver)
+function MadNLP.set_aug_diagonal!(kkt::SchurKKTSystem{T}, solver::MadNLP.MadNLPSolver) where T
     fill!(kkt.reg, zero(T))
     fill!(kkt.du_diag, zero(T))
     kkt.l_diag .= solver.xl_r .- solver.x_lr

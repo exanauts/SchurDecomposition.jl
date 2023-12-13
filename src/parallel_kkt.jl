@@ -145,7 +145,7 @@ function MadNLP.create_kkt_system(
 
     rsol = Ma57SchurSolver(Ki, Bi, K0)
     # rsol = PardisoSchurSolver(Ki, Bi, K0; linear_solver_options...)
-    linear_solver = MadNLP.LapackCPUSolver(S)
+    linear_solver = MadNLP.LapackCPUSolver(S; opt=opt_linear_solver)
 
     etc = Dict{Symbol,Any}()
     etc[:reduction] = 0.0
@@ -269,7 +269,7 @@ function _mul_expanded!(y::AbstractVector, kkt::ParallelKKTSystem, x::AbstractVe
     return
 end
 
-function MadNLP.mul!(
+function mul!(
     y::MadNLP.AbstractKKTVector,
     kkt::ParallelKKTSystem,
     x::MadNLP.AbstractKKTVector,
